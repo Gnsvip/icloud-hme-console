@@ -26,10 +26,10 @@ export async function api(
       throw new Error("服务暂时不可用，请稍后重试");
     const data = await response.json();
     if (!response.ok || data.ok === false)
-      throw new Error(
+      throw Object.assign(new Error(
         (data.saved ? "已保存，但连接测试失败：" : "") +
           (data.error || data.errors?.join("；") || "操作未完成，请重试"),
-      );
+      ), { status: response.status });
     return data;
   } catch (error) {
     if (controller.signal.aborted) throw new Error("请求已取消或超时，请重试");

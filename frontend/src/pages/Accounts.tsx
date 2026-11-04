@@ -23,14 +23,24 @@ import {
   Submit,
 } from "@/components/common";
 import { PageHead } from "@/components/PageHead";
+import { AppleLoginForm } from "./AppleLogin";
 export function AccountForm({
+  account, close, done,
+}: { account?: Row; close: () => void; done: () => void }) {
+  const [mode, setMode] = useState(account ? "cookie" : "apple");
+  if (mode === "apple") return <AppleLoginForm close={close} done={done} useCookie={() => setMode("cookie")} />;
+  return <CookieAccountForm account={account} close={close} done={done} useApple={!account ? () => setMode("apple") : undefined} />;
+}
+function CookieAccountForm({
   account,
   close,
   done,
+  useApple,
 }: {
   account?: Row;
   close: () => void;
   done: () => void;
+  useApple?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -148,6 +158,7 @@ export function AccountForm({
         </Field>
         <ErrorNotice error={error} />
         <div className="form-actions">
+          {useApple && <Button type="button" variant="ghost" onClick={useApple} disabled={busy}>使用账号密码登录</Button>}
           {!account && (
             <a className="text-link" href="/api/cookie-helper/download">
               <Download size={14} />
@@ -181,6 +192,7 @@ export function Accounts({
 }) {
   const [editing, setEditing] = useState<Row | null>(null);
   const [removing, setRemoving] = useState<Row | null>(null);
+  const [login, setLogin] = useState<Row | null>(null);
   const [busy, setBusy] = useState("");
   return (
     <>
@@ -233,17 +245,18 @@ export function Accounts({
               </div>
               <div className="account-check">
                 <ShieldCheck size={15} />
-                {a.has_cookies ? "已导入 Cookie" : "缺少 Cookie"}
+                {a.has_cookies ? (a.login_method === "apple" ? "Apple 已连接" : "已导入 Cookie") : "需要登录"}
                 <span />
                 <KeyRound size={15} />
                 {a.has_app_password ? "收件已配置" : "收件待配置"}
               </div>
-              {(a.error || a.last_mail_error) && (
+              {(a.error || a.last_error || a.last_mail_error) && (
                 <div className="account-warning">
-                  {a.error || a.last_mail_error}
+                  {a.error || a.last_error || a.last_mail_error}
                 </div>
               )}
               <div className="account-card-actions">
+                <Button variant="outline" size="sm" onClick={() => setLogin(a)}>重新登录</Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -285,6 +298,15 @@ export function Accounts({
           ))}
         </div>
       )}
+      <section className="panel" style={{ padding: 24, marginTop: 20 }}>
+        <h2>家庭共享与 iCloud+</h2>
+        <p className="muted">加入已共享 iCloud+ 的家庭后，可以使用隐藏邮件地址。接受家庭邀请或购买方案需要在 Apple 的官方流程中确认，完成后返回这里校验账号。</p>
+        <div className="form-actions">
+          <a className="text-link" href="https://support.apple.com/zh-cn/108380" target="_blank" rel="noopener noreferrer">查看加入家庭步骤 ↗</a>
+          <a className="text-link" href="https://support.apple.com/zh-cn/108349" target="_blank" rel="noopener noreferrer">查看 iCloud+ 付费开通步骤 ↗</a>
+        </div>
+      </section>
+      {login && <AppleLoginForm account={login} close={() => setLogin(null)} done={() => { setLogin(null); refresh(); }} />}
       {editing && (
         <AccountForm
           account={editing}

@@ -49,6 +49,8 @@ def main():
     def _shutdown(sig, frame):
         print("\n[*] Shutting down...")
         core._stop_event.set()
+        from routes.apple_login import manager as apple_login_manager
+        apple_login_manager.shutdown()
         os._exit(0)
 
     _signal.signal(_signal.SIGINT, _shutdown)

@@ -211,6 +211,8 @@ class AccountManager:
         host: str = "icloud.com",
         sync_aliases: bool = False,
         replace_existing: bool = False,
+        verified_identity: Dict | None = None,
+        hme_available: bool | None = None,
     ) -> Dict:
         from icloud_hme import ICloudHME
 
@@ -233,10 +235,17 @@ class AccountManager:
             "created_at": datetime.now().isoformat(),
         }
 
+        client = None
         try:
-            client = ICloudHME(cookies, host=host, verbose=False)
-            client.validate_session(timeout=18, max_attempts=1)
-            info = client.get_account_info()
+            if verified_identity is None or sync_aliases:
+                client = ICloudHME(cookies, host=host, verbose=False)
+            if verified_identity is None:
+                client.validate_session(timeout=18, max_attempts=1)
+                info = client.get_account_info()
+            else:
+                # Only the server-side Apple login flow supplies this identity,
+                # after independently validating its exported iCloud cookies.
+                info = verified_identity
             if info:
                 account["dsid"] = str(info.get("dsid", "") or "")
                 account["real_email"] = (
@@ -268,27 +277,35 @@ class AccountManager:
 
             account["last_validated"] = datetime.now().isoformat()
             account["last_error"] = None
+            if hme_available is not None:
+                account["hme_available"] = hme_available
+                account["login_method"] = "apple"
+                if not hme_available:
+                    account["status"] = "warning"
+                    account["last_error"] = "已登录 Apple，尚未检测到隐藏邮件地址服务。开通或家庭共享 iCloud+ 后请重新校验。"
         except Exception as e:
-            if isinstance(e, ValueError) and "Cookie 校验出来" in str(e):
+            if verified_identity is not None or (isinstance(e, ValueError) and "Cookie 校验出来" in str(e)):
                 raise
             account["status"] = "error"
             account["last_error"] = str(e)[:300]
-
-        duplicate_id = None
-        dsid = str(account.get("dsid") or "").strip()
-        real_email = str(account.get("real_email") or "").strip().lower()
-        if dsid or real_email:
-            for existing_id, existing in self.accounts.items():
-                existing_dsid = str(existing.get("dsid") or "").strip()
-                existing_real = str(existing.get("real_email") or "").strip().lower()
-                if dsid and existing_dsid and dsid == existing_dsid:
-                    duplicate_id = existing_id
-                    break
-                if real_email and real_email == existing_real:
-                    duplicate_id = existing_id
-                    break
+        finally:
+            if client is not None:
+                client.session.close()
 
         with self._lock:
+            duplicate_id = None
+            dsid = str(account.get("dsid") or "").strip()
+            real_email = str(account.get("real_email") or "").strip().lower()
+            if dsid or real_email:
+                for existing_id, existing in self.accounts.items():
+                    existing_dsid = str(existing.get("dsid") or "").strip()
+                    existing_real = str(existing.get("real_email") or "").strip().lower()
+                    if dsid and existing_dsid and dsid == existing_dsid:
+                        duplicate_id = existing_id
+                        break
+                    if real_email and real_email == existing_real:
+                        duplicate_id = existing_id
+                        break
             if duplicate_id:
                 if not replace_existing:
                     existing = self.accounts.get(duplicate_id, {})
@@ -297,6 +314,14 @@ class AccountManager:
                         "如果要添加新账号，请确认浏览器已切换到新的 Apple ID 后重新导出 Cookie。"
                     )
                 existing = dict(self.accounts.get(duplicate_id, {}))
+                if verified_identity is not None:
+                    if not sync_aliases:
+                        account["alias_total"] = existing.get("alias_total", 0)
+                        account["alias_active"] = existing.get("alias_active", 0)
+                    if existing.get("icloud_email"):
+                        account["icloud_email"] = existing["icloud_email"]
+                    if name.strip() in ("", "未命名账号", "iCloud 登录账号"):
+                        account["name"] = existing.get("name") or account["name"]
                 preserved_password = existing.get("app_password")
                 preserved_created = existing.get("created_at")
                 existing.update(account)
@@ -415,6 +440,7 @@ class AccountManager:
                 1 for a in aliases if a.get("active")
             )
             account["status"] = "active"
+            account["hme_available"] = True
             account["last_validated"] = datetime.now().isoformat()
             account["last_error"] = None
         except Exception as e:

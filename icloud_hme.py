@@ -310,7 +310,7 @@ class ICloudHME:
 
     # ---- 会话 ----
 
-    def validate_session(self, timeout: int = 20, max_attempts: int = MAX_RETRIES) -> Dict:
+    def validate_session(self, timeout: int = 20, max_attempts: int = MAX_RETRIES, require_hme: bool = True) -> Dict:
         """校验 iCloud 会话，获取 Hide My Email 服务端点及账号身份"""
         self._log("校验 iCloud 会话...")
         targets = [(f"{self.setup_url}/validate", self.origin)]
@@ -338,19 +338,12 @@ class ICloudHME:
         else:
             raise last_err or RuntimeError("iCloud 会话校验失败")
         premium = data.get("webservices", {}).get("premiummailsettings", {})
-        if not premium.get("url"):
-            raise RuntimeError(
-                "iCloud 会话校验失败 — 可能原因:\n"
-                "  1. 未开通 iCloud+ 订阅 (Hide My Email 需要 iCloud+)\n"
-                "  2. Cookie 已过期，请在 Chrome 重新登录 icloud.com\n"
-                "  3. 网络问题"
-            )
-        self._service_url = premium["url"].rstrip("/")
+        self._service_url = str(premium.get("url") or "").rstrip("/") or None
 
         # 提取账号身份信息
         ds_info = data.get("dsInfo", {})
         self._account_info = {
-            "dsid": str(ds_info.get("dsid", "")),
+            "dsid": str(ds_info.get("dsid") or ""),
             "appleId": str(ds_info.get("appleId", "") or ds_info.get("primaryEmail", "") or ds_info.get("appleIdEmail", "")),
             "primaryEmail": str(ds_info.get("primaryEmail", "") or ds_info.get("appleId", "")),
             "fullName": str(ds_info.get("fullName", "") or ds_info.get("name", "")),
@@ -363,6 +356,10 @@ class ICloudHME:
                     self._account_info["appleId"] = str(self.cookies[name])
                     break
 
+        if not self._account_info["dsid"] and not ds_info.get("appleId") and not ds_info.get("primaryEmail"):
+            raise RuntimeError("Apple 会话未返回有效账号信息，请重新登录")
+        if require_hme and not self._service_url:
+            raise RuntimeError("Apple 会话有效，但尚未检测到隐藏邮件地址服务。请开通或通过家庭共享使用 iCloud+ 后重新校验。")
         self._log(f"会话有效 → {self._account_info.get('appleId', '未知账号')}")
         return data
 
