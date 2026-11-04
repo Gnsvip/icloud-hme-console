@@ -1,0 +1,59 @@
+# Bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+
+# Internal
+.reasonix/
+.icloud-login-profile/
+
+# Backups
+backup/
+
+# Sensitive — never commit
+logs/
+results/
+cookies.json
+cookies.json.bak
+icloud_cookies.json
+accounts.json
+scheduler_state.json
+latest_emails.txt
+mail_cache.json
+
+# Development artifacts
+venv/
+node_modules/
+dist/
+.vite/
+.pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Private configuration and deployment artifacts
+.env
+.env.*
+!.env.example
+release/
+preview/
+backups/
+*.log
+*.bak
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*_cookies.json
+aliases_cache.json
+inventory.json
+pickup_links.json
+forward_config.json
+forward_configs.json

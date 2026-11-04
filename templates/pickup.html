@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>邮箱取码</title>
+  <style>
+    :root{color-scheme:light;--blue:#007aff;--blue-soft:#edf6ff;--ink:#101828;--muted:#667085;--line:#d9e5f2;--bg:#eef7fc;--paper:#fff;--paper-soft:#f8fbff;--green:#188038;--amber:#b54708;--red:#d92d20;--shadow:0 22px 64px rgba(44,92,140,.16)}
+    *{box-sizing:border-box}html{min-height:100%}body{margin:0;min-height:100vh;padding:clamp(56px,10vh,104px) 28px 48px;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit;letter-spacing:0}
+    .shell{width:min(820px,100%);margin:0 auto;padding:28px;border:1px solid var(--line);border-radius:8px;background:var(--paper);box-shadow:var(--shadow)}.mark{width:36px;height:22px;border-radius:999px;background:var(--blue);box-shadow:0 10px 22px rgba(0,122,255,.2)}h1{margin:18px 0 8px;font-size:40px;line-height:1.1;letter-spacing:0}.subtitle{margin:0;color:var(--muted);line-height:1.7}
+    .linked-email{margin-top:22px;padding:13px 16px;border:1px solid var(--line);border-radius:8px;background:var(--paper-soft)}.linked-email span{display:block;margin-bottom:5px;color:var(--muted);font-size:12px;font-weight:700}.linked-email strong{display:block;overflow-wrap:anywhere;font-size:16px}
+    button{height:40px;padding:0 14px;border:1px solid #b9dafc;border-radius:8px;background:var(--paper);color:var(--blue);font-weight:800;cursor:pointer;white-space:nowrap}button:hover{border-color:#75b7ff;background:var(--blue-soft)}button:focus-visible{outline:0;box-shadow:0 0 0 4px rgba(0,122,255,.16)}button:disabled{opacity:.5;cursor:not-allowed}
+    .latest-card{margin-top:18px;min-height:330px;padding:22px;border:1px solid var(--line);border-radius:8px;background:var(--paper-soft);transition:border-color .2s,background-color .2s,box-shadow .2s}.latest-card.is-new{animation:code-update 1.1s ease}.latest-head{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:28px}.latest-label{font-size:13px;font-weight:800;color:var(--muted)}.latest-live{display:inline-flex;align-items:center;gap:7px;min-width:116px;justify-content:flex-end;color:var(--muted);font-size:12px}.latest-dot{width:8px;height:8px;border-radius:50%;background:#98a2b3}.latest-card[data-state="ready"] .latest-dot{background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.13)}.latest-card[data-state="waiting"] .latest-dot{background:var(--blue);animation:pulse 1.6s infinite}.latest-card[data-state="retry"] .latest-dot{background:#f59e0b}.latest-card[data-state="unauthorized"] .latest-dot{background:var(--red)}
+    .code-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;min-height:104px;padding:12px 0 16px;border-bottom:1px solid var(--line)}.latest-code{display:block;min-width:0;min-height:67px;font-variant-numeric:tabular-nums;font-size:58px;font-weight:800;line-height:1.15;letter-spacing:0;color:var(--ink)}.latest-code.placeholder{color:#a8b3c2}.copy-code{width:142px;height:44px}
+    .mail-meta{display:grid;grid-template-columns:72px minmax(0,1fr);gap:9px 14px;align-items:center;padding-top:17px}.mail-meta dt{color:var(--muted);font-size:12px;font-weight:700}.mail-meta dd{min-width:0;min-height:20px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.mail-subject-row{display:flex;align-items:center;gap:9px}.mail-subject-text{min-width:0;overflow:hidden;text-overflow:ellipsis}.mail-subject-code{flex:0 0 auto;padding:2px 7px;border:1px solid #b9dafc;border-radius:5px;background:var(--blue-soft);color:var(--blue);font-size:11px;font-weight:800;font-variant-numeric:tabular-nums}.mail-subject-code[hidden]{display:none}.latest-foot{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:38px;margin-top:12px;color:var(--muted);font-size:12px}.latest-status{font-weight:700}.latest-card[data-state="ready"] .latest-status{color:var(--green)}.latest-card[data-state="retry"] .latest-status{color:var(--amber)}.latest-card[data-state="unauthorized"] .latest-status{color:var(--red)}.latest-updated{white-space:nowrap}
+    .denied-card{display:grid;place-items:center;min-height:260px;margin-top:22px;padding:32px;border:1px solid var(--line);border-radius:8px;background:var(--paper-soft);text-align:center}.denied-card strong{font-size:24px}.denied-card p{margin:10px 0 0;color:var(--muted)}
+    @keyframes code-update{0%{border-color:var(--blue);background:#eaf5ff;box-shadow:0 0 0 5px rgba(0,122,255,.13)}100%{border-color:var(--line);background:var(--paper-soft);box-shadow:none}}@keyframes pulse{50%{opacity:.35}}
+    @media(max-height:680px){body{padding-top:32px}}@media(max-width:720px){body{padding:28px 14px}.shell{padding:20px}h1{font-size:32px}.latest-card{min-height:342px;padding:18px}.latest-code{min-height:55px;font-size:46px}.code-row{grid-template-columns:1fr;gap:10px;min-height:132px}.copy-code{width:100%}.latest-foot{align-items:flex-start;flex-direction:column;gap:4px}}
+    @media(prefers-color-scheme:dark){:root{color-scheme:dark;--ink:#f2f4f7;--muted:#98a2b3;--line:#334155;--bg:#0b1118;--paper:#111923;--paper-soft:#16212d;--blue-soft:#102b46;--green:#55d98a;--amber:#f7b955;--red:#ff7b72;--shadow:0 22px 64px rgba(0,0,0,.38)}button{border-color:#36526d}.latest-card.is-new{animation-name:code-update-dark}.latest-code.placeholder{color:#526174}}@keyframes code-update-dark{0%{border-color:#5aaeff;background:#17324a;box-shadow:0 0 0 5px rgba(64,156,255,.16)}100%{border-color:var(--line);background:var(--paper-soft);box-shadow:none}}
+    @media(prefers-reduced-motion:reduce){.latest-card,.latest-dot{animation:none!important;transition:none}}
+  </style>
+</head>
+<body data-pickup-email="{{ pickup_email or '' }}" data-pickup-link-id="{{ pickup_link_id or '' }}" data-pickup-denied="{{ '1' if pickup_access_denied else '' }}">
+  <main class="shell">
+    <div class="mark"></div>
+    <h1>邮箱取码</h1>
+    {% if pickup_access_denied %}
+      <p class="subtitle">此取码链接无法访问。</p>
+      <section class="denied-card" aria-live="polite"><div><strong>无权限</strong><p>链接无效、已失效或 token 不正确。</p></div></section>
+    {% else %}
+      <p class="subtitle">最新验证码会自动更新。</p>
+      <section class="linked-email"><span>邮箱</span><strong>{{ pickup_email }}</strong></section>
+      <section id="latestCard" class="latest-card" data-state="waiting" aria-live="polite">
+        <header class="latest-head"><span class="latest-label">最新 6 位验证码</span><span class="latest-live"><i class="latest-dot"></i><span id="liveState">自动刷新</span></span></header>
+        <div class="code-row"><strong id="latestCode" class="latest-code placeholder">------</strong><button id="copyLatestCode" class="copy-code" type="button" disabled>复制验证码</button></div>
+        <dl class="mail-meta"><dt>邮件时间</dt><dd id="latestMailTime">--</dd><dt>发件人</dt><dd id="latestSender">--</dd><dt>标题</dt><dd class="mail-subject-row"><span id="latestSubject" class="mail-subject-text">--</span><span id="latestSubjectCode" class="mail-subject-code" hidden></span></dd></dl>
+        <footer class="latest-foot"><span id="latestStatus" class="latest-status">等待验证码</span><span id="latestUpdated" class="latest-updated">每 3 秒自动刷新</span></footer>
+      </section>
+    {% endif %}
+  </main>
+<script>
+(function(){
+  var beijingDateFormatter=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+  function formatDate(value){if(!value)return '';var raw=String(value).trim();var normalized=/^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(raw)?raw.replace(' ','T')+'Z':raw;var date=new Date(normalized);if(isNaN(date.getTime()))return raw;var parts={};beijingDateFormatter.formatToParts(date).forEach(function(part){if(part.type!=='literal')parts[part.type]=part.value});return parts.year+'-'+parts.month+'-'+parts.day+' '+parts.hour+':'+parts.minute+':'+parts.second}
+  function copyText(value,button){if(!value)return;navigator.clipboard.writeText(value).then(function(){var old=button.textContent;button.textContent='已复制';setTimeout(function(){button.textContent=old},1200)})}
+
+  var linkId=document.body.getAttribute('data-pickup-link-id')||'';
+  var denied=document.body.getAttribute('data-pickup-denied')==='1';
+  if(linkId&&!denied){
+    var card=document.getElementById('latestCard');var codeEl=document.getElementById('latestCode');var subjectCodeEl=document.getElementById('latestSubjectCode');var copyButton=document.getElementById('copyLatestCode');var stateEl=document.getElementById('liveState');var statusEl=document.getElementById('latestStatus');var updatedEl=document.getElementById('latestUpdated');var lastCode='';var latestTimer=null;var latestBusy=false;var stopped=false;
+    function setLatestState(state,text){card.dataset.state=state;stateEl.textContent=state==='ready'?'已连接':(state==='unauthorized'?'无权限':(state==='retry'?'正在重试':'自动刷新'));statusEl.textContent=text}
+    function updateLatest(data){var code=/^\d{6}$/.test(String(data.code||''))?String(data.code):'';if(code||!lastCode){document.getElementById('latestMailTime').textContent=formatDate(data.mail_time)||'--';document.getElementById('latestSender').textContent=data.sender||'--';document.getElementById('latestSubject').textContent=data.subject||'--';updatedEl.textContent=(code?'验证码更新于 ':'更新于 ')+(formatDate(data.checked_at)||'刚刚')}if(code){var changed=code!==lastCode;codeEl.textContent=code;codeEl.classList.remove('placeholder');subjectCodeEl.textContent='验证码 '+code;subjectCodeEl.hidden=false;copyButton.disabled=false;copyButton.dataset.code=code;setLatestState('ready',data.retained?'显示上次验证码，等待新验证码':'已获取最新验证码');if(changed){card.classList.remove('is-new');void card.offsetWidth;card.classList.add('is-new')}lastCode=code}else{if(!lastCode){codeEl.textContent='------';codeEl.classList.add('placeholder');subjectCodeEl.textContent='';subjectCodeEl.hidden=true;copyButton.disabled=true;copyButton.dataset.code=''}setLatestState('waiting','等待验证码')};}
+    function scheduleLatest(){if(stopped)return;if(latestTimer)clearTimeout(latestTimer);latestTimer=setTimeout(refreshLatest,3000)}
+    async function refreshLatest(){if(latestBusy||stopped)return;latestBusy=true;try{var token=new URLSearchParams(location.search).get('token')||'';var response=await fetch('/api/public/latest-code/'+encodeURIComponent(linkId)+'?token='+encodeURIComponent(token),{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});var data;try{data=await response.json()}catch(_){data={ok:false,status:'retry',error:'接口返回异常'}}if(response.status===403||data.status==='unauthorized'){stopped=true;setLatestState('unauthorized','无权限');updatedEl.textContent='链接无效或已失效';copyButton.disabled=true;return}if(!response.ok||!data.ok){if(/^\d{6}$/.test(String(data.code||'')))updateLatest(data);setLatestState('retry',data.code?'显示上次验证码，正在重试':'接口异常，3 秒后重试');if(!data.code)updatedEl.textContent=data.error||'暂时无法连接';return}updateLatest(data)}catch(error){setLatestState('retry','连接异常，3 秒后重试');if(!lastCode)updatedEl.textContent=error.message||'网络异常'}finally{latestBusy=false;scheduleLatest()}}
+    copyButton.addEventListener('click',function(){copyText(copyButton.dataset.code||'',copyButton)});refreshLatest();
+  }
+})();
+</script>
+</body>
+</html>

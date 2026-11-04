@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>iCloud HME - 多账号管理</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}?v={{ asset_version }}">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="logo"><div class="icon"></div>iCloud HME</div>
+    <a class="nav-item active" data-tab="dashboard">仪表盘</a>
+    <a class="nav-item" data-tab="emails">邮箱列表</a>
+    <a class="nav-item" data-tab="batch">批量创建</a>
+    <a class="nav-item" data-tab="codes">收码台</a>
+    <a class="nav-item" data-tab="inbox">收件箱</a>
+    <a class="nav-item" data-tab="docs">API 文档</a>
+    <a class="nav-item" data-tab="logs">运行日志</a>
+    <div class="section-label">账号列表</div>
+    <div id="sidebarAccounts"></div>
+    <button type="button" class="btn btn-outline btn-sm sidebar-add-account" onclick="showAddAccountModal()">+ 添加账号</button>
+    <div class="sidebar-footer"><a class="sidebar-logout" href="/admin/logout">退出后台</a></div>
+  </aside>
+
+  <main class="main">
+    <div class="header">
+      <h1 id="tabTitle">仪表盘</h1>
+      <div class="btn-group">
+        <button type="button" class="btn btn-outline btn-sm" onclick="refreshAll()">刷新</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="showAddAccountModal()">+ 添加账号</button>
+      </div>
+    </div>
+
+    <div id="view-dashboard">
+      <div class="cards" id="summaryCards"></div>
+      <div class="acc-cards" id="accCards"></div>
+    </div>
+
+    <div id="view-emails" style="display:none">
+      <div class="panel">
+        <div class="panel-header">
+          <span>隐私邮箱列表</span>
+          <div class="panel-actions">
+            <span class="panel-count" id="emailCount">0</span>
+            <button type="button" class="btn btn-outline btn-sm" onclick="refreshEmails().then(renderAliasTable)">刷新</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="refreshAliases()" title="从 iCloud 云端同步标签和状态">云端同步</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openAliasBatchSearch()">批量查找</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="copyAll()">复制全部</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="exportCSV()">CSV</button>
+          </div>
+        </div>
+        <div class="filter-bar">
+          <span class="filter-label">账号:</span>
+          <select id="aliasFilter" onchange="renderAliasTable()" title="选择后，云端同步只拉取这个账号"><option value="all">全部账号</option></select>
+          <input id="aliasListSearch" type="search" placeholder="搜索邮箱、标签、账号" oninput="setAliasListSearch(this.value)" autocomplete="off">
+        </div>
+        <div class="panel-body"><div id="aliasTableContainer" class="empty"><div class="icon"></div>暂无创建记录</div></div>
+      </div>
+    </div>
+
+    <div id="view-batch" style="display:none">
+      <div class="panel">
+        <div class="panel-header"><span>跨账号批量创建</span><span class="panel-count" id="batchAccCount">0 个可用账号</span></div>
+        <div class="panel-body batch-panel-body">
+          <div class="batch-compact">
+            <div class="batch-account-list" id="batchChkGroup"></div>
+            <div class="batch-create-row">
+              <label class="batch-field">每账号创建数量 <input type="number" id="batchCount" value="5" min="1" max="20" oninput="updateBatchCount(this.value)"></label>
+              <label class="batch-field">标签前缀 <input type="text" id="batchLabel" placeholder="可选" oninput="updateBatchLabel(this.value)"></label>
+              <label class="batch-field batch-link-option"><input type="checkbox" id="batchCreatePickupLinks"> 同时生成取码链接</label>
+              <button type="button" class="btn btn-primary btn-sm" id="btnBatchExec" onclick="execBatchCreate()">开始创建</button>
+            </div>
+            <div class="batch-service-row">
+              <div id="batchAutoStockSlot"></div>
+              <div id="batchSchedulerSlot"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-codes" style="display:none">
+      <div class="panel">
+        <div class="panel-header">
+          <span>验证码收码台</span>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-outline btn-sm" onclick="checkCodeIcloud()">iCloud 查件</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="calibrateCodeCloud()">云端校准</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="checkCodeForward()">转发 IMAP 查件</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openForwardConfigModal()">转发邮箱设置</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openPickupBatchModal('')">批量生成链接</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="exportCodeDesk()">导出</button>
+          </div>
+        </div>
+        <div class="code-toolbar">
+          <div class="code-tabs">
+            <button type="button" class="code-tab active" data-code-group="unused" onclick="setCodeGroup('unused')">未使用</button>
+            <button type="button" class="code-tab" data-code-group="finished" onclick="setCodeGroup('finished')">已使用</button>
+            <button type="button" class="code-tab" data-code-group="trash" onclick="setCodeGroup('trash')">垃圾箱</button>
+            <button type="button" class="code-tab" data-code-group="disabled" onclick="setCodeGroup('disabled')">已停用</button>
+            <button type="button" class="code-tab" data-code-group="all" onclick="setCodeGroup('all')">全部</button>
+          </div>
+          <select id="codeAccountFilter" onchange="setCodeAccountFilter(this.value)"><option value="">全部账号</option></select>
+          <input id="codeSearch" type="text" placeholder="搜索邮箱、标签、备注、验证码..." oninput="setCodeSearch(this.value)">
+          <span id="codeDeskStatus" class="code-status"></span>
+        </div>
+        <div id="codeSummary" class="code-summary"></div>
+        <div class="panel-body"><div id="codeDeskBody" class="code-empty">正在加载...</div></div>
+      </div>
+    </div>
+
+    <div id="view-inbox" style="display:none">
+      <div class="panel">
+        <div class="panel-header inbox-panel-header">
+          <span>收件箱检查</span>
+          <div class="inbox-toolbar">
+            <select id="inboxAccount" onchange="handleInboxAccountChange()" title="选择收件账号"></select>
+            <select id="inboxLimit" onchange="handleInboxLimitChange()" title="邮件数量">
+              <option value="10">10</option><option value="20" selected>20</option><option value="50">50</option><option value="100">100</option>
+            </select>
+            <div class="inbox-search">
+              <input type="text" id="aliasSearchInput" placeholder="指定邮箱查件..." title="输入隐私邮箱地址查件">
+              <button type="button" class="btn btn-outline btn-sm" onclick="searchAliasMail()">查件</button>
+            </div>
+            <button type="button" class="btn btn-outline btn-sm" id="btnInboxRefresh" onclick="refreshCurrentInboxView()">刷新</button>
+            <button type="button" class="btn btn-outline btn-sm" id="btnInboxSettings" onclick="openInboxSettings()">设置</button>
+            <span id="cacheStatus"></span>
+          </div>
+        </div>
+        <div class="panel-body"><div id="inboxMsgs" class="empty"><div class="icon"></div>正在读取收件箱</div></div>
+      </div>
+    </div>
+
+    <div id="view-docs" style="display:none">
+      <div class="panel docs-panel"><div class="panel-header"><span>API 文档</span></div><div class="panel-body" id="docsContent"></div></div>
+    </div>
+    <div id="view-logs" style="display:none">
+      <div class="panel"><div class="panel-header"><span>运行日志</span><div class="panel-actions"><button type="button" class="btn btn-outline btn-sm" onclick="cleanupLogs()">清理历史</button><button type="button" class="btn btn-outline btn-sm" onclick="clearLogs()">清空显示</button></div></div><div class="panel-body"><div class="log-feed" id="logFeed"></div></div></div>
+    </div>
+  </main>
+  <div class="copy-toast" id="toast"></div>
+<script src="{{ url_for('static', filename='js/admin.js') }}?v={{ asset_version }}"></script>
+<script src="{{ url_for('static', filename='js/inbox.js') }}?v={{ asset_version }}"></script>
+<script src="{{ url_for('static', filename='js/code_desk.js') }}?v={{ asset_version }}"></script>
+</body>
+</html>

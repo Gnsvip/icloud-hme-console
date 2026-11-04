@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "iCloud HME Cookie Helper",
+  "version": "1.0.1",
+  "description": "Export iCloud cookies as a Header String for iCloud HME.",
+  "permissions": ["cookies", "tabs", "clipboardWrite"],
+  "host_permissions": [
+    "https://*.icloud.com/*",
+    "https://*.icloud.com.cn/*",
+    "https://*.apple.com/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "iCloud HME Cookie Helper",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}

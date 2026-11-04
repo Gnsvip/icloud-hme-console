@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>iCloud HME Cookie Helper</title>
+  <style>
+    :root{--blue:#007aff;--blue2:#5ac8fa;--ink:#101828;--muted:#667085;--line:#d9e5f2;--danger:#d92d20;--ok:#188038}
+    *{box-sizing:border-box}
+    body{width:390px;margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:linear-gradient(135deg,#eaf7ff,#fbfffd)}
+    .card{border:1px solid rgba(174,205,236,.8);border-radius:18px;background:rgba(255,255,255,.88);box-shadow:0 18px 40px rgba(44,92,140,.16);padding:16px}
+    .brand{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:850;margin-bottom:8px}
+    .mark{width:30px;height:22px;border-radius:9px;background:linear-gradient(135deg,var(--blue2),var(--blue));box-shadow:0 10px 22px rgba(0,122,255,.22);position:relative}
+    .mark:after{content:"";position:absolute;left:7px;right:7px;top:7px;height:7px;border:2px solid #fff;border-top:0;border-radius:0 0 5px 5px;opacity:.95}
+    .mark:before{content:"";position:absolute;left:8px;right:8px;top:6px;height:8px;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg);opacity:.95}
+    p{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.55}
+    label{display:block;font-size:12px;font-weight:800;color:#5d718a;margin:12px 0 6px}
+    select,textarea{width:100%;border:1px solid #cfdced;border-radius:11px;background:rgba(255,255,255,.92);font-size:13px;outline:none}
+    select{height:40px;padding:0 11px}
+    textarea{height:126px;padding:11px;resize:none;line-height:1.45;font-family:"SF Mono","Cascadia Code",Consolas,monospace;color:#13233a}
+    select:focus,textarea:focus{border-color:#75b7ff;box-shadow:0 0 0 4px rgba(0,122,255,.12)}
+    .row{display:flex;gap:8px;margin-top:12px}
+    button{height:38px;border:1px solid #b9dafc;border-radius:10px;background:#fff;color:var(--blue);font-weight:850;padding:0 12px;cursor:pointer;white-space:nowrap;flex:1}
+    button.primary{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 10px 20px rgba(0,122,255,.2)}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .status{min-height:40px;margin-top:12px;padding:10px;border-radius:12px;background:#f4f9ff;color:var(--muted);font-size:12px;line-height:1.45;word-break:break-word}
+    .status.ok{color:var(--ok);background:#effaf3}
+    .status.err{color:var(--danger);background:#fff1f0}
+    .small{font-size:11px;color:#8aa0b8;margin-top:10px;line-height:1.5}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand"><span class="mark"></span><span>Cookie 助手</span></div>
+    <p>先登录 iCloud，完成双重认证后，生成 Header String，再复制粘贴到后台“导入 iCloud Cookie”。</p>
+    <label>地区</label>
+    <select id="host">
+      <option value="icloud.com.cn">中国区 iCloud</option>
+      <option value="icloud.com">全球区 iCloud</option>
+    </select>
+    <div class="row">
+      <button id="openIcloud">打开 iCloud</button>
+      <button id="generate" class="primary">生成 Cookie</button>
+    </div>
+    <label>Header String</label>
+    <textarea id="cookieOutput" readonly placeholder="生成后会显示在这里。"></textarea>
+    <div class="row">
+      <button id="copyCookie" class="primary">复制 Cookie</button>
+    </div>
+    <div id="status" class="status">先打开 iCloud 并登录，然后点“生成 Cookie”。</div>
+    <div class="small">Cookie 等同登录凭证，只粘贴到自己的后台，不要发给别人。</div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
