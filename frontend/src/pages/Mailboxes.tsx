@@ -29,7 +29,7 @@ import {
   SearchBox,
   Submit,
 } from "@/components/common";
-import { PageHead } from "@/App";
+import { PageHead } from "@/components/PageHead";
 import { LinkGenerator } from "./Tools";
 export function Mailboxes({
   mode,

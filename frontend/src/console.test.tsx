@@ -17,6 +17,7 @@ import { api, useRemote } from "./lib/api";
 import { InboxPage } from "./pages/Inbox";
 import { Batch } from "./pages/Tools";
 import { Mailboxes } from "./pages/Mailboxes";
+import App from "./App";
 function json(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -38,7 +39,39 @@ const accounts = [
   { id: "a", name: "测试账号 A", status: "active" },
   { id: "b", name: "测试账号 B", status: "active" },
 ];
+describe("lazy console pages", () => {
+  it("opens inbox and accounts through the application shell", async () => {
+    location.hash = "inbox";
+    vi.stubGlobal("fetch", vi.fn((path: string) => Promise.resolve(json(
+      path === "/api/accounts" ? { accounts } : { ok: true, emails: [] },
+    ))));
+    const { Wrapper } = wrapper();
+    render(<Wrapper><App /></Wrapper>);
+    expect(await screen.findByRole("heading", { name: "收件箱" })).toBeTruthy();
+    act(() => {
+      location.hash = "accounts";
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    expect(await screen.findByRole("heading", { name: "账号管理" })).toBeTruthy();
+  });
+  it("keeps private queries disabled before login", async () => {
+    const fetcher = vi.fn(() => Promise.resolve(json({ ok: false })));
+    vi.stubGlobal("fetch", fetcher);
+    const { Wrapper } = wrapper();
+    render(<Wrapper><App /></Wrapper>);
+    expect(await screen.findByRole("button", { name: /登录工作台/ })).toBeTruthy();
+    expect(fetcher.mock.calls).toHaveLength(1);
+    expect((fetcher.mock.calls as any[])[0][0]).toBe("/api/admin/session");
+  });
+});
 beforeEach(() => {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+    clear: () => storage.clear(),
+  });
   location.hash = "";
   Object.defineProperty(document, "hidden", {
     value: false,

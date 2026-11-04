@@ -11,6 +11,7 @@ if str(HERE) not in sys.path: sys.path.insert(0, str(HERE))
 from flask import Response, request, jsonify, render_template_string, current_app
 from icloud_hme import ICloudHME, extract_chrome_cookies
 from account_manager import AccountManager
+from imap_runtime import MailExecutor, wait_for_mail
 from inventory_manager import (
     InventoryManager,
     base_icloud_email_address,
@@ -225,7 +226,7 @@ def admin_logout_page():
 
 def api_admin_session():
     return jsonify({"ok": _is_admin_authed(), "user": "admin" if _is_admin_authed() else None})
-_log_queue = queue.Queue()
+_log_queue = queue.Queue(maxsize=2000)
 _log_file_lock = threading.Lock()
 _last_log_cleanup = 0.0
 _today_key = datetime.now(timezone.utc).astimezone(BEIJING_TZ).strftime("%Y%m%d")
@@ -240,9 +241,10 @@ _RATE_LIMIT_KW = ["limit","exceeded","maximum","quota","429","too many","try aga
 
 def _is_limit_error(err: str) -> bool: return any(kw in err.lower() for kw in _RATE_LIMIT_KW)
 
-_imap_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="imap")
+_imap_executor = MailExecutor(max_workers=4, max_pending=4, name="imap")
 _account_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="account")
 _inventory_cache_sync_ts = 0.0
+_inventory_cache_sync_revision = None
 
 def _clear_backend_caches():
     global _inventory_cache_sync_ts
@@ -635,8 +637,11 @@ def _apply_inventory_messages(messages, account_id="", method="iCloud IMAP", see
     return _inventory.apply_messages(messages or [], account_id=account_id, method=method)
 
 def _sync_inventory_from_mail_cache(force=False):
-    global _inventory_cache_sync_ts
+    global _inventory_cache_sync_ts, _inventory_cache_sync_revision
     now = time.time()
+    revision = (id(_account_mgr._cache), _account_mgr._cache.revision)
+    if not force and revision == _inventory_cache_sync_revision:
+        return {"ok": True, "skipped": True}
     if not force and now - _inventory_cache_sync_ts < 20:
         return {"ok": True, "skipped": True}
     _inventory_cache_sync_ts = now
@@ -659,18 +664,14 @@ def _sync_inventory_from_mail_cache(force=False):
             if inbox_messages:
                 result = _apply_inventory_messages(inbox_messages, account_id=acc_id, method="本地收件箱缓存")
                 total += int(result.get("count") or 0)
+        _inventory_cache_sync_revision = revision
         return {"ok": True, "updated": total}
     except Exception as e:
         _emit_log("warn", f"本地邮件缓存同步到收码台失败: {str(e)[:160]}")
         return {"ok": False, "error": str(e)}
 
 def _run_imap_with_timeout(fn, timeout=35):
-    future = _imap_executor.submit(fn)
-    try:
-        return future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
-        future.cancel()
-        raise TimeoutError("IMAP 请求超时。请确认 App 专用密码正确、网络能连接 imap.mail.me.com:993")
+    return wait_for_mail(_imap_executor.submit(fn, timeout=timeout))
 
 def _attach_cached_bodies(acc_id, messages):
     enriched = []
@@ -830,7 +831,17 @@ def _emit_log(level, msg):
         "level": str(level or "info"),
         "msg": _safe_log_message(msg),
     }
-    _log_queue.put(entry)
+    # Legacy SSE readers use this queue; the current UI reads the log file.
+    # Keep the newest entries even when nobody has an SSE connection open.
+    while True:
+        try:
+            _log_queue.put_nowait(entry)
+            break
+        except queue.Full:
+            try:
+                _log_queue.get_nowait()
+            except queue.Empty:
+                pass
     try:
         with _log_file_lock:
             LOGS_DIR.mkdir(parents=True, exist_ok=True)

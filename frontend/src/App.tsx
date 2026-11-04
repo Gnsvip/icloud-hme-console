@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -23,10 +23,16 @@ import {
   Users,
 } from "lucide-react";
 import { post, stamp, useRemote, type Row } from "./lib/api";
-import { AccountForm, Accounts } from "./pages/Accounts";
-import { Mailboxes } from "./pages/Mailboxes";
-import { InboxPage } from "./pages/Inbox";
-import { Batch, ForwardSettings, Logs, PickupLinks } from "./pages/Tools";
+import { PageHead } from "./components/PageHead";
+import { PageBoundary } from "./components/PageBoundary";
+const AccountForm = lazy(() => import("./pages/Accounts").then(m => ({ default: m.AccountForm })));
+const Accounts = lazy(() => import("./pages/Accounts").then(m => ({ default: m.Accounts })));
+const Mailboxes = lazy(() => import("./pages/Mailboxes").then(m => ({ default: m.Mailboxes })));
+const InboxPage = lazy(() => import("./pages/Inbox").then(m => ({ default: m.InboxPage })));
+const Batch = lazy(() => import("./pages/Tools").then(m => ({ default: m.Batch })));
+const ForwardSettings = lazy(() => import("./pages/Tools").then(m => ({ default: m.ForwardSettings })));
+const Logs = lazy(() => import("./pages/Tools").then(m => ({ default: m.Logs })));
+const PickupLinks = lazy(() => import("./pages/Tools").then(m => ({ default: m.PickupLinks })));
 import {
   Button,
   Empty,
@@ -260,6 +266,7 @@ export default function App() {
             error={accountsQuery.error || stateQuery.error}
             retry={refresh}
           />
+          <PageBoundary key={tab}><Suspense fallback={<Loading />} >
           {tab === "dashboard" && (
             <Dashboard
               accounts={accounts}
@@ -287,6 +294,7 @@ export default function App() {
           {tab === "settings" && <ForwardSettings accounts={accounts} />}
           {tab === "logs" && <Logs />}
           {tab === "docs" && <Docs />}
+          </Suspense></PageBoundary>
         </main>
         <footer className="app-footer">
           <span>
@@ -296,13 +304,13 @@ export default function App() {
         </footer>
       </div>
       {add && (
-        <AccountForm
+        <PageBoundary><Suspense fallback={<Loading />}><AccountForm
           close={() => setAdd(false)}
           done={() => {
             setAdd(false);
             refresh();
           }}
-        />
+        /></Suspense></PageBoundary>
       )}
       {command && (
         <Modal
@@ -355,28 +363,6 @@ export default function App() {
           </div>
         </Modal>
       )}
-    </div>
-  );
-}
-export function PageHead({
-  eyebrow,
-  title,
-  description,
-  children,
-}: {
-  eyebrow?: string;
-  title: string;
-  description: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="page-head">
-      <div>
-        {eyebrow && <div className="eyebrow">{eyebrow}</div>}
-        <h1>{title}</h1>
-        <p>{description}</p>
-      </div>
-      <div className="page-head-actions">{children}</div>
     </div>
   );
 }

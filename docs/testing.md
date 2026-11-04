@@ -1,21 +1,13 @@
 # 验证范围
 
-前端验证：在 `frontend/` 中运行 `npm ci`、`npm run build`、`npm test`。
+后端：安装 `requirements.txt` 和 `pytest`，运行 `python -m pytest tests -q`。所有测试共用临时运行目录，不读取或修改部署数据，也不连接真实邮箱。测试账号和密码仅用于测试进程。
 
-后端验证：安装 `requirements.txt` 和 `pytest` 后运行 `python -m pytest tests/test_redesign.py tests/test_public_config.py -q`。`tests/conftest.py` 仅为测试进程设置测试密码；该值不是 Web 服务的默认密码。
+前端：在 `frontend/` 运行 `npm ci`、`npm test`、`npm run build`。覆盖登录状态、失败保留数据、隐藏页面停止轮询、跨账号邮件隔离、分页选择、批量创建与懒加载页面切换。
 
-历史回归检查保留于 `tests/test_regressions.py`。原始服务源码与界面改版后的源码，在相同依赖环境下均为 49 项通过、7 项失败。已知失败为：
+历史回归测试已更新到现有接口：共享取码服务和带令牌的 `/c/`、`/api/public/latest-code/`。退役的匿名邮箱查询入口保持不可用。测试没有跳过或忽略旧失败。
 
-- `public_pickup_accepts_email_and_returns_latest_two_messages`
-- `public_pickup_plus_alias_queries_base_address`
-- `public_pickup_has_no_rate_limit`
-- `qq_imap_pickup_uses_full_tag_and_falls_back_after_icloud`
-- `pickup_page_only_asks_for_email`
-- `legacy_pickup_credentials_are_removed`
-- `multi_alias_search_forward_bindings_and_scheduler_countdown_are_wired`
+`tests/test_optimizations.py` 覆盖库存原子写入失败、损坏文件保护、并发读写、查询缓存失效、日志队列容量、真实本地 socket 超时中断、任务排队上限、异常连接清理，以及缓存期限、条数和字节上限。
 
-前四项仍调用已不存在的 `api_public_code`；后三项检查旧页面或旧脚本文本。此仓库保留这些检查以记录差异，不会为了旧测试恢复匿名查件接口、删除现有鉴权或忽略失败。
+GitHub Actions 在每次推送和 PR 时运行后端与前端检查。后端覆盖 Linux 的 Python 3.10 / 3.13 和 Windows 的 Python 3.13；前端使用 Node.js 24。工作流仅有仓库读取权限，不部署服务器。
 
-新测试采用临时缓存和合成邮件，不需要真实 iCloud Cookie。真实账号创建/删除、Microsoft 外部授权与转发邮箱连接需要单独进行集成验证。
-
-`tests/benchmark_redesign.py` 可对比一个旧版源码目录的缓存写入行为。它只生成合成数据；运行方式为 `python tests/benchmark_redesign.py /path/to/baseline`。
+真实账号创建/删除、Microsoft 外部授权与真实邮箱连接仍需单独进行集成验证。`tests/benchmark_redesign.py` 使用合成数据评估缓存批量写入，测量不代表真实邮件网络速度。

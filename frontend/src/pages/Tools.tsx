@@ -37,7 +37,7 @@ import {
   SearchBox,
   Submit,
 } from "@/components/common";
-import { PageHead } from "@/App";
+import { PageHead } from "@/components/PageHead";
 
 function AccountChecks({
   accounts,

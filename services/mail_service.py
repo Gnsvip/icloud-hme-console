@@ -11,12 +11,9 @@ from app_core import *
 
 
 _pickup_links_lock = threading.Lock()
-_pickup_query_lock = threading.Lock()
+_pickup_query_lock = threading.RLock()
 _pickup_queries = {}
-_pickup_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=16,
-    thread_name_prefix="pickup",
-)
+_pickup_executor = MailExecutor(max_workers=16, max_pending=16, name="pickup")
 PICKUP_LINKS_FILE = RESULTS_DIR / "pickup_links.json"
 _pickup_email_pattern = re.compile(
     r"^[a-z0-9][a-z0-9._+-]{0,63}@(icloud\.com|icloud\.com\.cn|me\.com|mac\.com)$",
@@ -803,6 +800,21 @@ def api_all_inboxes():
     })
 
 
+def _coalesced_pickup(key, load):
+    def finished(done):
+        with _pickup_query_lock:
+            if _pickup_queries.get(key) is done:
+                _pickup_queries.pop(key, None)
+
+    with _pickup_query_lock:
+        future = _pickup_queries.get(key)
+        if future is None:
+            future = _pickup_executor.submit(load, timeout=60)
+            _pickup_queries[key] = future
+            future.add_done_callback(finished)
+    return wait_for_mail(future)
+
+
 def _query_pickup_messages(acc_id, lookup_email):
     key = (str(acc_id or ""), str(lookup_email or "").strip().lower())
 
@@ -813,18 +825,7 @@ def _query_pickup_messages(acc_id, lookup_email):
         messages = _fetch_missing_bodies(key[0], messages, max_bodies=2)
         return sorted(messages or [], key=_message_sort_timestamp, reverse=True)[:2]
 
-    with _pickup_query_lock:
-        future = _pickup_queries.get(key)
-        if future is None:
-            future = _pickup_executor.submit(load)
-            _pickup_queries[key] = future
-    try:
-        return future.result()
-    finally:
-        if future.done():
-            with _pickup_query_lock:
-                if _pickup_queries.get(key) is future:
-                    _pickup_queries.pop(key, None)
+    return _coalesced_pickup(key, load)
 
 
 def _query_forward_pickup_messages(requested_email, lookup_email):
@@ -842,18 +843,7 @@ def _query_forward_pickup_messages(requested_email, lookup_email):
             raise RuntimeError(result.get("error") or "转发 IMAP 查询失败")
         return sorted(result.get("messages") or [], key=_message_sort_timestamp, reverse=True)[:2]
 
-    with _pickup_query_lock:
-        future = _pickup_queries.get(key)
-        if future is None:
-            future = _pickup_executor.submit(load)
-            _pickup_queries[key] = future
-    try:
-        return future.result()
-    finally:
-        if future.done():
-            with _pickup_query_lock:
-                if _pickup_queries.get(key) is future:
-                    _pickup_queries.pop(key, None)
+    return _coalesced_pickup(key, load)
 
 
 def api_search_inboxes():
@@ -1061,10 +1051,7 @@ def get_public_pickup_result(email):
 
     if forward_enabled:
         try:
-            messages = _run_imap_with_timeout(
-                lambda: _query_forward_pickup_messages(email, lookup_email),
-                timeout=60,
-            )
+            messages = _query_forward_pickup_messages(email, lookup_email)
             if messages:
                 _sync_inventory_from_messages(
                     _messages_for_inventory(messages, lookup_email),

@@ -512,14 +512,17 @@ class AccountManager:
         if not force and cached and age < 300:
             return cached[:limit]
 
+        mail = None
         try:
             mail = self.get_mail_client(acc_id)
             new_msgs = mail.check_inbox(limit=limit, days=days)
-            mail.disconnect()
         except Exception:
             if cached:
                 return cached[:limit]
             raise
+        finally:
+            if mail is not None:
+                mail.disconnect()
 
         if new_msgs:
             self._cache.set_inbox(acc_id, new_msgs)
@@ -535,14 +538,17 @@ class AccountManager:
         if not force and cached and age < 300:
             return cached[:limit]
 
+        mail = None
         try:
             mail = self.get_mail_client(acc_id)
             new_msgs = mail.find_by_recipient(alias_email, limit=limit, days=days)
-            mail.disconnect()
         except Exception:
             if cached:
                 return cached[:limit]
             raise
+        finally:
+            if mail is not None:
+                mail.disconnect()
 
         if new_msgs:
             self._cache.set_alias_mail(acc_id, alias_email, new_msgs)

@@ -6,6 +6,10 @@ import email
 import html
 import imaplib
 import json
+import copy
+import os
+import tempfile
+from collections import OrderedDict
 import re
 import ssl
 import threading
@@ -20,6 +24,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 import requests
 
 from services.deactivation_service import detect_deactivation_notice
+from imap_runtime import open_imap, close_imap
 
 
 HERE = Path(__file__).resolve().parent
@@ -166,7 +171,18 @@ def extract_verification_code(text: Any) -> str:
 class InventoryManager:
     def __init__(self, path: Path = INVENTORY_FILE) -> None:
         self.path = path
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self._snapshot = None
+        self._signature = None
+        self._queries = OrderedDict()
+        self._alias_sync = None
+
+    def _file_signature(self):
+        try:
+            stat = self.path.stat()
+            return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino)
+        except FileNotFoundError:
+            return None
 
     def _empty(self) -> Dict[str, Any]:
         return {"version": 1, "updated_at": _now(), "items": {}}
@@ -196,28 +212,59 @@ class InventoryManager:
         return changed
 
     def load(self) -> Dict[str, Any]:
+        with self.lock:
+            return copy.deepcopy(self._load_locked())
+
+    def _load_locked(self) -> Dict[str, Any]:
+        signature = self._file_signature()
+        if self._snapshot is not None and signature == self._signature:
+            return self._snapshot
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return self._empty()
+        except FileNotFoundError:
+            if self._snapshot is not None:
+                raise RuntimeError("库存文件意外消失，已停止写入，请恢复备份")
+            data = self._empty()
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("库存文件读取失败，已保留原文件并停止写入，请检查文件或恢复备份") from exc
         if not isinstance(data, dict):
-            return self._empty()
+            raise RuntimeError("库存文件格式损坏，已停止写入，请恢复备份")
         items = data.get("items")
         if isinstance(items, list):
             items = {str(x.get("email", "")).lower(): x for x in items if isinstance(x, dict) and x.get("email")}
         if not isinstance(items, dict):
-            items = {}
+            raise RuntimeError("库存 items 格式损坏，已停止写入，请恢复备份")
+        if any(not isinstance(item, dict) for item in items.values()):
+            raise RuntimeError("库存记录格式损坏，已停止写入，请恢复备份")
         data["items"] = items
         data.setdefault("version", 1)
         data.setdefault("updated_at", "")
         if self._normalize_usage_groups(data):
             self.save(data)
+        else:
+            self._snapshot = data
+            self._signature = signature
+            self._queries.clear()
         return data
 
     def save(self, data: Dict[str, Any]) -> None:
-        data["updated_at"] = _now()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        with self.lock:
+            self._normalize_usage_groups(data)
+            data["updated_at"] = _now()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix=".inventory-", dir=self.path.parent)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(data, handle, ensure_ascii=False, separators=(",", ":"))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(name, self.path)
+                self._snapshot = copy.deepcopy(data)
+                self._signature = self._file_signature()
+                self._queries.clear()
+            finally:
+                if os.path.exists(name):
+                    os.unlink(name)
 
     def _default_item(self, email_addr: str) -> Dict[str, Any]:
         return {
@@ -257,6 +304,12 @@ class InventoryManager:
 
     def sync_aliases(self, rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         with self.lock:
+            rows = list(rows or [])
+            self._load_locked()
+            if self._alias_sync is not None:
+                signature, previous, summary = self._alias_sync
+                if signature == self._signature and rows == previous:
+                    return {"ok": True, "changed": 0, "summary": dict(summary)}
             data = self.load()
             items = data["items"]
             changed = 0
@@ -287,7 +340,9 @@ class InventoryManager:
                     changed += 1
             if changed:
                 self.save(data)
-            return {"ok": True, "changed": changed, "summary": self.summary(data)}
+            summary = self.summary(data)
+            self._alias_sync = (self._signature, copy.deepcopy(rows), dict(summary))
+            return {"ok": True, "changed": changed, "summary": summary}
 
     def summary(self, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
         data = data or self.load()
@@ -307,7 +362,18 @@ class InventoryManager:
         return counts
 
     def list_items(self, group: str = "", query: str = "", account_id: str = "") -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        data = self.load()
+        with self.lock:
+            data = self._load_locked()
+            key = (group, query.strip().lower(), account_id)
+            if key not in self._queries:
+                self._queries[key] = self._filter_items(data, group, query, account_id)
+                if len(self._queries) > 32:
+                    self._queries.popitem(last=False)
+            self._queries.move_to_end(key)
+            rows, summary = self._queries[key]
+            return [dict(row) for row in rows], dict(summary)
+
+    def _filter_items(self, data, group, query, account_id):
         q = (query or "").strip().lower()
         base_query = base_icloud_email_address(q)
         query_values = {base_query or q}
@@ -322,10 +388,11 @@ class InventoryManager:
                 continue
             if account_id and item.get("account_id") != account_id:
                 continue
-            hay = " ".join(str(item.get(k, "")) for k in ("email", "label", "remark", "code", "subject", "account_email")).lower()
-            if q and not any(value in hay for value in query_values):
-                continue
-            rows.append(dict(item))
+            if q:
+                hay = " ".join(str(item.get(k, "")) for k in ("email", "label", "remark", "code", "subject", "account_email")).lower()
+                if not any(value in hay for value in query_values):
+                    continue
+            rows.append(item)
 
         def score(item: Dict[str, Any]) -> Tuple[int, str, str]:
             if item.get("group") == "finished":
@@ -717,7 +784,7 @@ def _open_forward_connection(cfg: Dict[str, Any]):
     host, port = str(cfg.get("host") or ""), int(cfg.get("port") or 993)
     if not host or not cfg.get("username"):
         raise RuntimeError("转发邮箱配置不完整")
-    conn = imaplib.IMAP4_SSL(host, port, ssl_context=ssl.create_default_context()) if cfg.get("secure", True) else imaplib.IMAP4(host, port)
+    conn = open_imap(host, port, secure=cfg.get("secure", True), ssl_context=ssl.create_default_context())
     try:
         if cfg.get("provider") == "microsoft":
             token = _microsoft_access_token(cfg)
@@ -729,10 +796,7 @@ def _open_forward_connection(cfg: Dict[str, Any]):
             conn.login(str(cfg["username"]), str(cfg["password"]))
         return conn
     except Exception:
-        try:
-            conn.logout()
-        except Exception:
-            pass
+        close_imap(conn)
         raise
 
 
@@ -760,10 +824,7 @@ def test_forward_mail_connection(profile_id: str = "", account_id: str = "") -> 
             "message_count": message_count,
         }
     finally:
-        try:
-            conn.logout()
-        except Exception:
-            pass
+        close_imap(conn)
 
 
 def _decode_mime(value: str) -> str:
@@ -874,11 +935,7 @@ def check_forward_mail(target_emails: Iterable[str] | Dict[str, Iterable[str]], 
         except Exception as exc:
             errors.append(f"{cfg.get('username') or cfg.get('id')}: {str(exc)[:180]}")
         finally:
-            if conn is not None:
-                try:
-                    conn.logout()
-                except Exception:
-                    pass
+            close_imap(conn)
     if not successful_profiles:
         return {"ok": False, "error": "; ".join(errors) or "没有可检查的目标邮箱", "errors": errors}
     return {

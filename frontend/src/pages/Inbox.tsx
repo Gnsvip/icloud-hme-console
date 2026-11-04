@@ -16,7 +16,7 @@ import {
   Loading,
   RefreshButton,
 } from "@/components/common";
-import { PageHead } from "@/App";
+import { PageHead } from "@/components/PageHead";
 import { AccountForm } from "./Accounts";
 function messageKey(m: Row) {
   return m.account_id + ":" + m.id;

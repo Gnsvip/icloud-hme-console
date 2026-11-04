@@ -8,6 +8,8 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
+from flask import request
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
@@ -455,7 +457,7 @@ def test_public_pickup_accepts_email_and_returns_latest_two_messages():
                 patch.object(mail_service._account_mgr, "check_alias_mail", return_value=messages), \
                 patch.object(mail_service, "_fetch_missing_bodies", side_effect=lambda _acc, rows, **_kw: rows), \
                 patch.object(mail_service, "_sync_inventory_from_messages"):
-            response = app.make_response(mail_service.api_public_code())
+            response = app.make_response(mail_service.get_public_pickup_result(request.get_json()["email"]))
 
     data = response.get_json()
     assert response.status_code == 200
@@ -491,7 +493,7 @@ def test_public_pickup_plus_alias_queries_base_address():
                 patch.object(mail_service._account_mgr, "check_alias_mail", return_value=[message]) as check_mail, \
                 patch.object(mail_service, "_fetch_missing_bodies", side_effect=lambda _acc, rows, **_kw: rows), \
                 patch.object(mail_service, "_sync_inventory_from_messages"):
-            response = app.make_response(mail_service.api_public_code())
+            response = app.make_response(mail_service.get_public_pickup_result(request.get_json()["email"]))
 
     data = response.get_json()
     assert response.status_code == 200
@@ -527,8 +529,8 @@ def test_public_pickup_cache_reads_matching_inbox_messages():
     print("  PASS test_public_pickup_cache_reads_matching_inbox_messages")
 
 
-def test_public_pickup_has_no_rate_limit():
-    """公开取码的连续请求必须全部进入邮件查询。"""
+def test_pickup_sequential_requests_remain_available():
+    """共享取码服务的连续请求在队列空闲时均可正常完成。"""
     from unittest.mock import patch
 
     from services import mail_service
@@ -552,11 +554,11 @@ def test_public_pickup_has_no_rate_limit():
                 patch.object(mail_service._account_mgr, "check_alias_mail", return_value=[message]) as check_mail, \
                 patch.object(mail_service, "_fetch_missing_bodies", side_effect=lambda _acc, rows, **_kw: rows), \
                 patch.object(mail_service, "_sync_inventory_from_messages"):
-            statuses = [app.make_response(mail_service.api_public_code()).status_code for _ in range(25)]
+            statuses = [app.make_response(mail_service.get_public_pickup_result(request.get_json()["email"])).status_code for _ in range(25)]
 
     assert statuses == [200] * 25
     assert check_mail.call_count == 25
-    print("  PASS test_public_pickup_has_no_rate_limit")
+    print("  PASS test_pickup_sequential_requests_remain_available")
 
 
 def test_public_pickup_coalesces_concurrent_mail_queries():
@@ -636,21 +638,19 @@ def test_public_pickup_removes_tracking_links_from_body():
     print("  PASS test_public_pickup_removes_tracking_links_from_body")
 
 
-def test_pickup_page_only_asks_for_email():
-    """公开取码页只显示邮箱输入框。"""
+def test_pickup_requires_token_instead_of_anonymous_email():
+    """Retired anonymous entry points stay unavailable; tokens gate mail reads."""
+    from unittest.mock import patch
+    from services import mail_service
     from web_ui import app
-
     client = app.test_client()
-    html = client.get("/pickup").get_data(as_text=True)
-    assert 'id="email"' in html
-    assert 'id="pickupKey"' not in html
-    assert "取码密钥" not in html
-    assert "pickupToken" not in html
-    assert "body:JSON.stringify({email:email})" in html
-    assert client.get("/pickup").status_code == 200
-    assert client.get("/pickup/").status_code == 200
-    assert client.get("/code").status_code == 200
-    print("  PASS test_pickup_page_only_asks_for_email")
+    for path in ("/pickup", "/pickup/", "/code"):
+        assert client.get(path).status_code == 404
+    assert client.post("/api/public/code", json={"email": "sample@icloud.com"}).status_code == 404
+    with patch.object(mail_service, "resolve_pickup_link", return_value=None), patch.object(mail_service, "get_public_pickup_result") as query:
+        assert client.get("/c/1000?token=wrong").status_code == 403
+        assert client.get("/api/public/latest-code/1000?token=wrong").status_code == 403
+        query.assert_not_called()
 
 
 def test_pickup_link_store_reuses_and_rotates_secure_links():
@@ -1096,71 +1096,22 @@ def test_all_visible_times_use_beijing_timezone():
     print("  PASS test_all_visible_times_use_beijing_timezone")
 
 
-def test_legacy_pickup_credentials_are_removed():
-    """公开取码不保留旧密钥模型，专属链接使用独立随机令牌。"""
-    sources = "\n".join(
-        (HERE / path).read_text(encoding="utf-8")
-        for path in [
-            "app_core.py",
-            "inventory_manager.py",
-            "routes/accounts.py",
-            "routes/inbox.py",
-            "routes/pickup.py",
-            "services/mail_service.py",
-            "templates/pickup.html",
-            "static/js/admin.js",
-            "static/js/code_desk.js",
-        ]
-    )
-    for old in (
-        "MAIL_KEYS_FILE",
-        "/api/mail-keys/",
-        "邮箱取码密钥",
-        "generateCodeKey",
-        "codeKeyValue",
-        "PICKUP_GROUPS_FILE",
-        "pickup_group",
-        "pickup-groups",
-        "group_id",
-        "取码分组",
-        "PICKUP_ACCESS_KEY",
-        "pickup_access_key",
-        "pickupKey",
-        "取码密钥",
-        "pickup_token",
-    ):
-        assert old not in sources
-    pickup = (HERE / "templates" / "pickup.html").read_text(encoding="utf-8")
-    code_desk = (HERE / "static" / "js" / "code_desk.js").read_text(encoding="utf-8")
-    assert 'id="key"' not in pickup
-    assert 'id="pickupKey"' not in pickup
-    assert "最新两封邮件" in pickup
-    assert 'class="mail-code-summary"' in pickup
-    assert "mail-code-placeholder" in pickup
-    assert "index===0?'open'" not in pickup
-    assert '<details class="mail-item"' not in pickup
-    assert 'id="mailModal"' in pickup
-    assert "data-message-index" in pickup
-    assert "event.stopPropagation()" in pickup
-    assert "'/pickup/'+encodeURIComponent(email)" not in code_desk
-    assert "/api/pickup-links/for-email/" in code_desk
-    assert "/api/pickup-links/batch" in code_desk
-    assert "basePickupEmail" in code_desk
-    assert "setCodeSearch" in code_desk
-    assert "codeState.group='all'" in code_desk
-    assert "生成记录" in code_desk
-    assert "&quot;pickup-batch&quot;" not in code_desk
-    assert "action==='pickup-batch'" not in code_desk
-    assert "下载 TXT" in code_desk
-    assert "downloadPickupRecordHistory" in code_desk
-    assert "/api/pickup-links?page=" in code_desk
-    admin_html = (HERE / "templates" / "admin.html").read_text(encoding="utf-8")
-    assert "onclick=\"openPickupBatchModal('')\">批量生成链接</button>" in admin_html
-    assert "item.pickup_email||item.email" in code_desk
-    assert "取码链接" in code_desk
-    assert "email+'----'+absolute" in code_desk
-    assert "--------" not in code_desk
-    print("  PASS test_legacy_pickup_credentials_are_removed")
+def test_pickup_page_uses_fixed_mailbox_and_latest_code_controls():
+    """The current token page binds one mailbox and exposes only its code UI."""
+    from unittest.mock import patch
+    from services import mail_service
+    from web_ui import app
+    with patch.object(mail_service, "resolve_pickup_link", return_value={"id": "1000", "email": "sample+one@icloud.com"}):
+        response = app.test_client().get("/c/1000?token=test-only")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'data-pickup-email="sample+one@icloud.com"' in html
+    assert 'id="latestCode"' in html
+    assert 'id="copyLatestCode"' in html
+    assert 'id="email"' not in html
+    assert 'id="pickupKey"' not in html
+    assert "/api/public/latest-code/" in html
+    assert "no-store" in response.headers["Cache-Control"]
 
 
 def test_batch_selection_uses_store_and_is_not_reset_on_render():
@@ -1380,6 +1331,8 @@ def test_qq_imap_config_is_fixed_and_connection_is_tested():
 
     class FakeImap:
         def __init__(self, host, port, **kwargs):
+            self.sock = Mock()
+            self._command = Mock()
             calls.append(("connect", host, port, bool(kwargs.get("ssl_context"))))
 
         def login(self, username, password):
@@ -1457,7 +1410,7 @@ def test_qq_imap_pickup_uses_full_tag_and_falls_back_after_icloud():
     ), patch.object(mail_service, "check_forward_mail", side_effect=query_forward), patch.object(
         mail_service, "_sync_inventory_from_messages"
     ):
-        response = app.make_response(mail_service.api_public_code())
+        response = app.make_response(mail_service.get_public_pickup_result(request.get_json()["email"]))
 
     data = response.get_json()
     assert response.status_code == 200
@@ -1548,6 +1501,8 @@ def test_microsoft_forward_imap_uses_oauth2_xoauth():
 
     class FakeImap:
         def __init__(self, host, port, **kwargs):
+            self.sock = Mock()
+            self._command = Mock()
             calls.append(("connect", host, port, bool(kwargs.get("ssl_context"))))
 
         def authenticate(self, mechanism, callback):
@@ -1596,6 +1551,8 @@ def test_forward_imap_scans_only_targets_bound_to_each_icloud_account():
 
     class FakeImap:
         def __init__(self, host, port, **kwargs):
+            self.sock = Mock()
+            self._command = Mock()
             self.username = ""
 
         def login(self, username, password):
@@ -1650,27 +1607,22 @@ def test_forward_imap_scans_only_targets_bound_to_each_icloud_account():
     print("  PASS test_forward_imap_scans_only_targets_bound_to_each_icloud_account")
 
 
-def test_multi_alias_search_forward_bindings_and_scheduler_countdown_are_wired():
-    """批量查找、账号绑定 IMAP 与调度倒计时入口必须完整连通。"""
-    inbox = (HERE / "static" / "js" / "inbox.js").read_text(encoding="utf-8")
-    code_desk = (HERE / "static" / "js" / "code_desk.js").read_text(encoding="utf-8")
-    admin = (HERE / "static" / "js" / "admin.js").read_text(encoding="utf-8")
-    admin_html = (HERE / "templates" / "admin.html").read_text(encoding="utf-8")
-    routes = (HERE / "routes" / "inventory.py").read_text(encoding="utf-8")
-
-    assert 'onclick="openAliasBatchSearch()"' in admin_html
-    assert "function parseAliasBatchQueries(value)" in inbox
-    assert "window.applyAliasBatchSearch=function(selectMatches)" in inbox
-    assert "matches.forEach(function(row){_aliasSelection[aliasRowKey(row)]=true;});" in inbox
-    assert "window.bulkDeleteAliases" in inbox
-    assert "_forwardProfiles=(d&&d.configs)||[]" in code_desk
-    assert 'id="fwAccount"' in code_desk
-    assert "startMicrosoftForwardAuth" in code_desk
-    assert "/microsoft/start" in routes and "/microsoft/poll" in routes
-    assert "Number(state.next_trigger||0)" in admin
-    assert "秒后创建" in admin
-    assert "setInterval(refreshSchedulerCountdown,1000)" in admin
-    print("  PASS test_multi_alias_search_forward_bindings_and_scheduler_countdown_are_wired")
+def test_forward_auth_routes_and_scheduler_state_contract():
+    """Forward authorization and scheduler state keep their current API contract."""
+    from unittest.mock import patch
+    import app_core as core
+    from web_ui import app
+    rules = {str(rule): rule.methods for rule in app.url_map.iter_rules()}
+    assert "POST" in rules["/api/forward-config/<profile_id>/microsoft/start"]
+    assert "POST" in rules["/api/forward-config/<profile_id>/microsoft/poll"]
+    client = app.test_client()
+    with app.app_context():
+        client.set_cookie(core.ADMIN_SESSION_COOKIE, core._admin_token())
+    with patch.dict(core._global_state, {"next_trigger": 2000000000, "running": True}):
+        response = client.get("/api/state")
+    assert response.status_code == 200
+    assert response.get_json()["next_trigger"] == 2000000000
+    assert response.get_json()["running"] is True
 
 
 def test_random_tag_quantity_link_badge_wide_search_and_sticky_inbox_are_wired():
@@ -1728,11 +1680,11 @@ if __name__ == "__main__":
         ("public_pickup_accepts_email_and_returns_latest_two_messages", test_public_pickup_accepts_email_and_returns_latest_two_messages),
         ("public_pickup_plus_alias_queries_base_address", test_public_pickup_plus_alias_queries_base_address),
         ("public_pickup_cache_reads_matching_inbox_messages", test_public_pickup_cache_reads_matching_inbox_messages),
-        ("public_pickup_has_no_rate_limit", test_public_pickup_has_no_rate_limit),
+        ("public_pickup_has_no_rate_limit", test_pickup_sequential_requests_remain_available),
         ("public_pickup_coalesces_concurrent_mail_queries", test_public_pickup_coalesces_concurrent_mail_queries),
         ("public_pickup_does_not_show_payment_digits_as_code", test_public_pickup_does_not_show_payment_digits_as_code),
         ("public_pickup_removes_tracking_links_from_body", test_public_pickup_removes_tracking_links_from_body),
-        ("pickup_page_only_asks_for_email", test_pickup_page_only_asks_for_email),
+        ("pickup_page_only_asks_for_email", test_pickup_requires_token_instead_of_anonymous_email),
         ("pickup_link_store_reuses_and_rotates_secure_links", test_pickup_link_store_reuses_and_rotates_secure_links),
         ("pickup_link_allows_trash_item_from_readable_account", test_pickup_link_allows_trash_item_from_readable_account),
         ("pickup_batch_generates_multiple_arbitrary_tag_links", test_pickup_batch_generates_multiple_arbitrary_tag_links),
@@ -1744,7 +1696,7 @@ if __name__ == "__main__":
         ("pickup_links_can_be_revoked_individually_and_in_batch", test_pickup_links_can_be_revoked_individually_and_in_batch),
         ("pickup_record_ui_has_single_and_batch_revoke", test_pickup_record_ui_has_single_and_batch_revoke),
         ("all_visible_times_use_beijing_timezone", test_all_visible_times_use_beijing_timezone),
-        ("legacy_pickup_credentials_are_removed", test_legacy_pickup_credentials_are_removed),
+        ("legacy_pickup_credentials_are_removed", test_pickup_page_uses_fixed_mailbox_and_latest_code_controls),
         ("batch_selection_uses_store_and_is_not_reset_on_render", test_batch_selection_uses_store_and_is_not_reset_on_render),
         ("batch_creation_uses_spaced_random_delays", test_batch_creation_uses_spaced_random_delays),
         ("auto_stock_config_migrates_to_multiple_accounts", test_auto_stock_config_migrates_to_multiple_accounts),
@@ -1758,7 +1710,7 @@ if __name__ == "__main__":
         ("forward_imap_configs_are_per_icloud_account_and_keep_secrets", test_forward_imap_configs_are_per_icloud_account_and_keep_secrets),
         ("microsoft_forward_imap_uses_oauth2_xoauth", test_microsoft_forward_imap_uses_oauth2_xoauth),
         ("forward_imap_scans_only_targets_bound_to_each_icloud_account", test_forward_imap_scans_only_targets_bound_to_each_icloud_account),
-        ("multi_alias_search_forward_bindings_and_scheduler_countdown_are_wired", test_multi_alias_search_forward_bindings_and_scheduler_countdown_are_wired),
+        ("multi_alias_search_forward_bindings_and_scheduler_countdown_are_wired", test_forward_auth_routes_and_scheduler_state_contract),
         ("random_tag_quantity_link_badge_wide_search_and_sticky_inbox_are_wired", test_random_tag_quantity_link_badge_wide_search_and_sticky_inbox_are_wired),
     ]
     

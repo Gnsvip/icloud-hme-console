@@ -22,7 +22,7 @@ import {
   Pill,
   Submit,
 } from "@/components/common";
-import { PageHead } from "@/App";
+import { PageHead } from "@/components/PageHead";
 export function AccountForm({
   account,
   close,

@@ -19,6 +19,7 @@ iCloud Mail — IMAP 收件箱检查模块
 """
 
 import imaplib
+from imap_runtime import open_imap, close_imap
 import email
 import re
 import time
@@ -53,12 +54,13 @@ class ICloudMail:
 
     def connect(self) -> bool:
         try:
-            self._conn = imaplib.IMAP4_SSL(self.imap_server, self.imap_port, timeout=IMAP_TIMEOUT)
+            self._conn = open_imap(self.imap_server, self.imap_port, timeout=IMAP_TIMEOUT)
             self._conn.login(self.apple_id, self.app_password)
             if self.verbose:
                 print(f"[IMAP] Connected as {self.apple_id} via {self.region_host} ({self.imap_server})")
             return True
         except imaplib.IMAP4.error as e:
+            self.disconnect()
             msg = str(e)
             if "authentication" in msg.lower() or "login" in msg.lower():
                 raise RuntimeError(
@@ -69,14 +71,12 @@ class ICloudMail:
                 )
             raise RuntimeError(f"IMAP 连接失败: {msg}")
         except Exception as e:
+            self.disconnect()
             raise RuntimeError(f"IMAP 连接失败: {e}")
 
     def disconnect(self):
         if self._conn:
-            try:
-                self._conn.logout()
-            except Exception:
-                pass
+            close_imap(self._conn)
             self._conn = None
 
     @property
