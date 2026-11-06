@@ -385,6 +385,10 @@ class ICloudHME:
             timeout=timeout,
             max_attempts=max_attempts,
         )
+        if (not isinstance(response, dict) or response.get("success") is not True
+                or not isinstance(response.get("result"), dict)
+                or not isinstance(response["result"].get("hmeEmails"), list)):
+            raise RuntimeError("iCloud 未返回完整的别名列表，请稍后重试。")
         aliases = self._parse_alias_list(response)
         self._log(f"共 {len(aliases)} 个别名")
         return aliases
@@ -447,31 +451,31 @@ class ICloudHME:
                     continue
         raise RuntimeError(f"创建别名失败: {last_err}" if last_err else f"创建别名失败，已重试 {max_retries} 次")
 
-    def delete(self, anonymous_id: str) -> bool:
-        """删除别名 (必要时先停用再删除)"""
+    def delete(self, anonymous_id: str, active: Optional[bool] = None) -> bool:
+        """先停用活跃别名；只有永久删除被确认后才返回成功。"""
         self._resolve_service()
+        if active is None:
+            alias = next((a for a in self.list_aliases() if a["anonymousId"] == anonymous_id), None)
+            if alias is None:
+                raise ValueError("该别名已不在此账号的 iCloud 列表中，请刷新工作台。")
+            active = alias["active"]
         self._log(f"删除 {anonymous_id} ...")
-        deactivated = False
+
+        def require_success(response, fallback):
+            if not isinstance(response, dict) or response.get("success") is not True:
+                detail = (response.get("error") or {}).get("errorMessage", fallback) if isinstance(response, dict) else fallback
+                raise RuntimeError(detail)
+
+        if active:
+            resp = self._request("POST", f"{self._service_url}/v1/hme/deactivate",
+                                 json_data={"anonymousId": anonymous_id}, max_attempts=1)
+            require_success(resp, "Apple 未确认停用，请刷新云端状态后重试。")
         try:
             resp = self._request("POST", f"{self._service_url}/v1/hme/delete",
-                                 json_data={"anonymousId": anonymous_id}, max_attempts=2)
-            if resp.get("success") is False:
-                raise RuntimeError(resp.get("error", {}).get("errorMessage", "delete failed"))
-        except Exception:
-            self._log("直接删除失败，尝试先停用...")
-            resp = self._request("POST", f"{self._service_url}/v1/hme/deactivate",
-                                 json_data={"anonymousId": anonymous_id}, max_attempts=2)
-            if resp.get("success") is False:
-                raise RuntimeError(resp.get("error", {}).get("errorMessage", "deactivate failed"))
-            deactivated = True
-            try:
-                resp = self._request("POST", f"{self._service_url}/v1/hme/delete",
-                                     json_data={"anonymousId": anonymous_id}, max_attempts=2)
-                if resp.get("success") is False:
-                    raise RuntimeError(resp.get("error", {}).get("errorMessage", "delete failed"))
-            except Exception as e:
-                self._log(f"永久删除失败，已停用: {e}")
-                return deactivated
+                                 json_data={"anonymousId": anonymous_id}, max_attempts=1)
+            require_success(resp, "Apple 未确认永久删除，请刷新云端状态后重试。")
+        except Exception as exc:
+            raise RuntimeError(f"别名已停用，但永久删除未完成：{exc}") from exc
         self._log("已删除")
         return True
 
@@ -518,7 +522,7 @@ class ICloudHME:
                 if isinstance(hme, list):
                     aliases_raw = hme
 
-        if not aliases_raw:
+        if aliases_raw is None:
             def _find_dict_array(d, depth=0):
                 if depth > 4 or d is None:
                     return None

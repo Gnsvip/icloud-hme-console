@@ -119,23 +119,31 @@ export function Mailboxes({
     setConfirm({
       title: `删除 ${items.length} 个云端别名？`,
       description:
-        "此操作会从 iCloud 删除选中的别名。请确认这些地址不再需要接收邮件。",
+        "此操作会从 iCloud 删除选中的别名，并保留本地垃圾箱记录。云端已不存在的地址不会重复删除。请确认这些地址不再需要接收邮件。",
       run: async () => {
-        for (const row of items) {
-          if (!row.anonymousId || !row.account_id)
-            throw new Error("部分地址缺少云端标识，请先执行云端同步");
-          await post(
-            `/api/accounts/${enc(row.account_id)}/aliases/${enc(row.anonymousId)}/delete`,
-            { email: row.email },
-          );
-          setSelected((old) => {
-            const next = { ...old };
-            delete next[row.email];
-            return next;
-          });
+        let absent = 0;
+        try {
+          for (const row of items) {
+            if (!row.anonymousId || !row.account_id)
+              throw new Error("部分地址缺少云端标识，请先执行云端同步");
+            const result = await post(
+              `/api/accounts/${enc(row.account_id)}/aliases/${enc(row.anonymousId)}/delete`,
+              { email: row.email },
+            );
+            if (result.already_absent) absent++;
+            setSelected((old) => {
+              const next = { ...old };
+              delete next[row.email];
+              return next;
+            });
+          }
+          toast.success(absent === items.length
+            ? "此账号的云端已无所选别名，本地记录已移入垃圾箱"
+            : absent ? `已删除 ${items.length - absent} 个云端别名，${absent} 个已不在云端；本地记录已移入垃圾箱`
+              : "云端别名已删除，本地记录已移入垃圾箱");
+        } finally {
+          await refresh();
         }
-        await refresh();
-        toast.success("云端别名已删除");
       },
     });
   }

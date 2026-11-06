@@ -296,24 +296,24 @@ def api_delete_alias(acc_id, anonymous_id):
     email = (data.get("email") or "").strip()
     if not email:
         for row in _read_alias_cache().get("aliases", []):
-            if isinstance(row, dict) and row.get("anonymousId") == anonymous_id:
+            if isinstance(row, dict) and row.get("account_id") == acc_id and row.get("anonymousId") == anonymous_id:
                 email = row.get("email", "")
                 break
     try:
-        ok = _account_mgr.delete_alias(acc_id, anonymous_id, email=email)
-        if ok:
-            _remove_alias_cache(email=email, anonymous_id=anonymous_id)
-            if email:
-                _inventory.update_item(
-                    email,
-                    group="trash",
-                    active=False,
-                    deleted_at=datetime.now().isoformat(timespec="seconds"),
-                    status_type="warn",
-                    status_message="已从 iCloud 删除",
-                )
-        _emit_log("info", f"删除别名: {acc_id} {anonymous_id}")
-        return jsonify({"ok": ok})
+        result = _account_mgr.delete_alias(acc_id, anonymous_id, email=email)
+        email = result["email"]
+        message = "此账号的 iCloud 已无该别名，已移入本地垃圾箱" if result["already_absent"] else "已从 iCloud 删除"
+        _remove_alias_cache(email=email)
+        _inventory.update_item(
+            email,
+            group="trash",
+            active=False,
+            deleted_at=datetime.now().isoformat(timespec="seconds"),
+            status_type="warn",
+            status_message=message,
+        )
+        _emit_log("info", f"{message}: {acc_id} {anonymous_id}")
+        return jsonify({"ok": True, "message": message, **result})
     except Exception as e:
         return jsonify({"ok":False,"error":str(e)})
 

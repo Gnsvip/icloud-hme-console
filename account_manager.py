@@ -860,17 +860,33 @@ class AccountManager:
             self.validate_account(acc_id)
         return ok
 
-    def delete_alias(self, acc_id: str, anonymous_id: str, email: str = "") -> bool:
+    def delete_alias(self, acc_id: str, anonymous_id: str, email: str = "") -> Dict:
+        """Resolve the current account's alias before any destructive request."""
         client = self.get_client(acc_id, verbose=False)
-        alias = self._resolve_alias_identity(client, anonymous_id, email)
-        alias_id = alias.get("anonymousId") or anonymous_id
-        if not alias_id:
-            raise ValueError("缺少 anonymousId，请先从 iCloud 云端同步别名")
-        ok = client.delete(alias_id)
-        if ok:
-            self._remove_local_email(alias.get("email", email))
+        email = (email or "").strip().lower()
+        anonymous_id = (anonymous_id or "").strip()
+        try:
+            aliases = client.list_aliases()
+            by_id = next((a for a in aliases if anonymous_id and a.get("anonymousId") == anonymous_id), None)
+            if by_id and email and by_id.get("email", "").lower() != email:
+                raise ValueError("邮箱地址与云端标识不一致，请先同步云端列表。")
+            alias = next((a for a in aliases if a.get("email", "").lower() == email), None) if email else by_id
+            if alias is None:
+                if not email:
+                    raise ValueError("该别名已不在此账号的 iCloud 列表中，请先同步云端列表。")
+                self._remove_local_email(email)
+                return {"deleted": False, "already_absent": True, "email": email}
+            alias_id = alias.get("anonymousId")
+            if not alias_id:
+                raise ValueError("缺少 anonymousId，请先从 iCloud 云端同步别名")
+            if client.delete(alias_id, active=alias["active"]) is not True:
+                raise RuntimeError("Apple 未确认删除，工作台记录已保留。")
+            email = alias["email"]
+            self._remove_local_email(email)
             self.validate_account(acc_id)
-        return ok
+            return {"deleted": True, "already_absent": False, "email": email}
+        finally:
+            client.session.close()
 
     def get_summary(self) -> Dict:
         total_aliases = sum(
