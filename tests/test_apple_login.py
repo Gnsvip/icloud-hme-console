@@ -92,6 +92,7 @@ def test_two_factor_imports_only_verified_icloud_cookies_and_discards_temporary_
     rig.apple.two_factor_delivery_method = delivery
     rig.apple.session.cookies.set("auth-secret", "do-not-import", domain="idmsa.apple.com")
     rig.apple.session.cookies.set("evil-secret", "do-not-import", domain="evilicloud.com")
+    rig.apple.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "other-region", domain=".icloud.com.cn")
     flow = start(rig)
     assert rig.manager.status(flow.id)["delivery"] == delivery
     assert flow.state == "awaiting_code"
@@ -268,13 +269,13 @@ def test_real_library_unknown_delivery_verifies_existing_device_code(rig, tmp_pa
     client.trust_session.assert_called_once()
 
 
-def scripted_apple(rig, tmp_path, responses):
+def scripted_apple(rig, tmp_path, responses, host="icloud.com"):
     """Exercise pyicloud's real verification/trust/token methods, not mocks."""
-    client = login.create_client(INPUT["apple_id"], INPUT["password"], str(tmp_path), "icloud.com")
+    client = login.create_client(INPUT["apple_id"], INPUT["password"], str(tmp_path), host)
     client.authenticate = Mock()
     client._requires_mfa = True
     client.session.data.update(session_token="synthetic-session", account_country="CHN")
-    client.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "synthetic-cookie", domain=".icloud.com.cn")
+    client.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "synthetic-cookie", domain="." + host)
     calls = []
 
     def send(request, **kwargs):
@@ -301,22 +302,57 @@ SETUP = "https://setup.icloud.com/setup/ws/1/accountLogin"
 SETUP_CN = "https://setup.icloud.com.cn/setup/ws/1/accountLogin"
 
 
-def test_real_library_follows_apple_region_redirect_after_accepting_code(rig, tmp_path):
+@pytest.mark.parametrize("host,target,setup", [
+    ("icloud.com", "iCloud.com.cn", SETUP),
+    ("icloud.com.cn", "iCloud.com", SETUP_CN),
+])
+def test_real_library_rejects_region_change_after_accepting_code(rig, tmp_path, host, target, setup):
     responses = [
         (AUTH + "/verify/trusteddevice/securitycode", 204, None),
         (AUTH + "/2sv/trust", 204, None),
-        (SETUP, 302, {"domainToUse": "iCloud.com.cn"}),
-        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+        (setup, 302, {"domainToUse": target}),
     ]
-    client, calls = scripted_apple(rig, tmp_path, responses)
-    flow = start(rig)
+    client, calls = scripted_apple(rig, tmp_path, responses, host)
+    flow = start(rig, host=host)
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "failed"
+    assert flow.code_accepted and flow.attempts == 0
+    assert flow.host == host and client.is_china_mainland == (host == "icloud.com.cn")
+    assert "未自动切换区域" in flow.error
+    assert "你选择的是" + ("中国区" if host == "icloud.com.cn" else "国际区") in flow.error
+    assert len(calls) == 3 and not responses
+    rig.verifier_factory.assert_not_called()
+    assert rig.accounts.accounts == {}
+
+
+@pytest.mark.parametrize("host,setup", [("icloud.com", SETUP), ("icloud.com.cn", SETUP_CN)])
+def test_real_library_completes_in_selected_region(rig, tmp_path, host, setup):
+    responses = [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (setup, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+    ]
+    _, calls = scripted_apple(rig, tmp_path, responses, host)
+    # Omitting the region must default to international.
+    flow = start(rig, **({"host": host} if host == "icloud.com.cn" else {}))
     rig.manager.verify(flow.id, "123456")
     assert idle(rig.manager, flow.id).state == "complete"
-    assert flow.code_accepted and flow.attempts == 0
-    assert flow.host == "icloud.com.cn" and client.is_china_mainland
-    assert calls[-1].headers["Origin"] == "https://www.icloud.com.cn"
-    assert rig.verifier_factory.call_args.kwargs["host"] == "icloud.com.cn"
+    assert flow.host == host
+    assert calls[-1].headers["Origin"] == "https://www." + host
+    assert rig.verifier_factory.call_args.kwargs["host"] == host
+    assert rig.accounts.get_account(flow.account["id"])["host"] == host
     assert not responses
+
+
+@pytest.mark.parametrize("host,target", [("icloud.com", "icloud.com.cn"), ("icloud.com.cn", "icloud.com")])
+def test_cross_region_http_requests_are_blocked_before_sending(rig, host, target):
+    send = Mock()
+    rig.apple.session.send = send
+    rig.apple.authenticate.side_effect = lambda: rig.apple.session.get("https://setup." + target + "/setup/ws/1/accountLogin")
+    flow = start(rig, host=host)
+    assert flow.state == "failed" and flow.host == host
+    assert "未自动切换区域" in flow.error
+    send.assert_not_called()
 
 
 @pytest.mark.parametrize("failure", [403, requests.ReadTimeout("secret response")])
@@ -335,26 +371,27 @@ def test_real_library_session_failure_is_not_reported_as_an_incorrect_code(rig, 
     assert rig.accounts.accounts == {}
 
 
-def test_resume_after_region_connection_timeout_never_resubmits_the_code(rig, tmp_path):
+@pytest.mark.parametrize("host,setup", [("icloud.com", SETUP), ("icloud.com.cn", SETUP_CN)])
+def test_resume_keeps_selected_region_without_resubmitting_code(rig, tmp_path, host, setup):
     responses = [
         (AUTH + "/verify/trusteddevice/securitycode", 204, None),
         (AUTH + "/2sv/trust", 204, None),
-        (SETUP, 302, {"domainToUse": "icloud.com.cn"}),
-        (SETUP_CN, requests.ReadTimeout(), {}),
+        (setup, requests.ReadTimeout(), {}),
         (AUTH + "/2sv/trust", 204, None),
-        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+        (setup, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
     ]
-    _, calls = scripted_apple(rig, tmp_path, responses)
-    flow = start(rig)
+    _, calls = scripted_apple(rig, tmp_path, responses, host)
+    flow = start(rig, host=host)
     with pytest.raises(login.LoginError):
         rig.manager.resume(flow.id)
     rig.manager.verify(flow.id, "123456")
     idle(rig.manager, flow.id)
     assert flow.state == "awaiting_connection" and flow.client is not None
-    assert flow.host == "icloud.com.cn"
+    assert flow.host == host
     rig.manager.resume(flow.id)
     assert idle(rig.manager, flow.id).state == "complete"
     assert sum("/securitycode" in call.url for call in calls) == 1
+    assert flow.host == host
     assert not responses
 
 
@@ -482,6 +519,33 @@ def test_real_library_constructs_without_network_and_verifies_tls(rig, tmp_path,
     assert client.session.verify is True
     login.AppleLoginManager._dispose(SimpleNamespace(client=client, temporary=None))
     assert client._password_raw is None
+
+
+@pytest.mark.parametrize("host", ["icloud.com", "icloud.com.cn"])
+@pytest.mark.parametrize("result", [200, 302, "timeout"])
+def test_cookie_validation_uses_only_selected_region(rig, monkeypatch, host, result):
+    client = ICloudHME({}, host=host, verbose=False)
+    response = requests.Response()
+    response.status_code = result if isinstance(result, int) else 200
+    response._content = json.dumps({"dsInfo": IDENTITY}).encode()
+    response.headers["Location"] = "https://setup." + ("icloud.com" if host == "icloud.com.cn" else "icloud.com.cn")
+    request = Mock(return_value=response)
+    if result == "timeout":
+        request.side_effect = requests.Timeout()
+    monkeypatch.setattr(client.session, "request", request)
+    try:
+        if result == 200:
+            client.validate_session(max_attempts=1, require_hme=False)
+        else:
+            with pytest.raises(RuntimeError):
+                client.validate_session(max_attempts=1, require_hme=False)
+        request.assert_called_once()
+        assert request.call_args.args[1].startswith("https://setup." + host + "/setup/ws/1/validate?")
+        assert request.call_args.kwargs["allow_redirects"] is False
+        assert client.host == host
+        assert client.setup_url == "https://setup." + host + "/setup/ws/1"
+    finally:
+        client.session.close()
 
 
 @pytest.mark.parametrize("data,require_hme,valid", [

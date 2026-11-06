@@ -266,7 +266,7 @@ class ICloudHME:
 
     def _request(self, method: str, url: str, json_data: Any = None,
                  timeout: int = REQUEST_TIMEOUT, max_attempts: int = MAX_RETRIES,
-                 origin: Optional[str] = None) -> Any:
+                 origin: Optional[str] = None, allow_redirects: bool = True) -> Any:
         full_url = self._build_url(url)
         request_origin = origin or self.origin
         headers = {
@@ -283,7 +283,10 @@ class ICloudHME:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                resp = self.session.request(method, full_url, headers=headers, data=body, timeout=timeout)
+                resp = self.session.request(method, full_url, headers=headers, data=body, timeout=timeout,
+                                            allow_redirects=allow_redirects)
+                if not allow_redirects and 300 <= resp.status_code < 400:
+                    raise RuntimeError("所选 iCloud 区域返回了重定向，本次会话校验已停止，未自动切换区域。")
                 if not resp.ok:
                     last_err = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
                     if resp.status_code in (401, 403):
@@ -313,30 +316,10 @@ class ICloudHME:
     def validate_session(self, timeout: int = 20, max_attempts: int = MAX_RETRIES, require_hme: bool = True) -> Dict:
         """校验 iCloud 会话，获取 Hide My Email 服务端点及账号身份"""
         self._log("校验 iCloud 会话...")
-        targets = [(f"{self.setup_url}/validate", self.origin)]
-        if self.host == "icloud.com.cn":
-            targets = [
-                ("https://setup.icloud.com/setup/ws/1/validate", "https://www.icloud.com"),
-                (f"{self.setup_url}/validate", self.origin),
-            ]
-        last_err = None
-        for url, origin in targets:
-            try:
-                data = self._request(
-                    "POST",
-                    url,
-                    timeout=timeout,
-                    max_attempts=max_attempts,
-                    origin=origin,
-                )
-                if url.startswith("https://setup.icloud.com/"):
-                    self._setup_url = "https://setup.icloud.com/setup/ws/1"
-                break
-            except Exception as e:
-                last_err = e
-                continue
-        else:
-            raise last_err or RuntimeError("iCloud 会话校验失败")
+        data = self._request(
+            "POST", f"{self.setup_url}/validate", timeout=timeout,
+            max_attempts=max_attempts, origin=self.origin, allow_redirects=False,
+        )
         premium = data.get("webservices", {}).get("premiummailsettings", {})
         self._service_url = str(premium.get("url") or "").rstrip("/") or None
 

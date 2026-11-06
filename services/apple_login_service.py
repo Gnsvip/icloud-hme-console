@@ -25,6 +25,11 @@ class LoginError(Exception):
         self.status = status
 
 
+def region_mismatch(host, target):
+    regions = {"icloud.com": "国际区", "icloud.com.cn": "中国区"}
+    return LoginError(f"你选择的是{regions[host]} iCloud，但 Apple 要求使用{regions[target]}。本次登录已停止，未自动切换区域。")
+
+
 @dataclass
 class LoginFlow:
     id: str
@@ -54,7 +59,7 @@ def create_client(apple_id, password, directory, host):
     from pyicloud import PyiCloudService
     from pyicloud.exceptions import PyiCloud2FARequiredException
 
-    class RegionalClient(PyiCloudService):
+    class RegionLockedClient(PyiCloudService):
         def trust_session(self):
             if not super().trust_session():
                 raise LoginError("验证码已通过，但 Apple 尚未建立受信任的 iCloud 会话，请在 iCloud 官方网页确认账号状态后重试。")
@@ -69,15 +74,10 @@ def create_client(apple_id, password, directory, host):
                 current = "icloud.com.cn" if self.is_china_mainland else "icloud.com"
                 if response is None or response.status_code != 302 or target not in ("icloud.com", "icloud.com.cn") or target == current:
                     raise
-                # Apple, rather than the region dropdown, is authoritative for
-                # a migrated account. Follow its explicit region response once.
-                self._is_china_mainland = target == "icloud.com.cn"
-                self._setup_endpoints()
-                self.session.headers.update({"Origin": self._home_endpoint, "Referer": self._home_endpoint + "/"})
-                return super()._authenticate_with_token(require_trust=require_trust)
+                raise region_mismatch(host, target) from None
 
     # No keyring access, family-device discovery, or automatic terms acceptance.
-    client = RegionalClient(
+    client = RegionLockedClient(
         apple_id, password, cookie_directory=directory,
         china_mainland=host == "icloud.com.cn", authenticate=False,
         with_family=False, accept_terms=False, verify=True,
@@ -275,6 +275,12 @@ class AppleLoginManager:
         def bounded_send(request, **kwargs):
             self._check(flow)
             parts = urlsplit(str(getattr(request, "url", "")))
+            # Also stop HTTP Location redirects before another region is sent
+            # any request. The selected region stays fixed for this flow.
+            hostname = parts.hostname or ""
+            for region in ("icloud.com", "icloud.com.cn"):
+                if (hostname == region or hostname.endswith("." + region)) and region != flow.host:
+                    raise region_mismatch(flow.host, region)
             if parts.hostname == "idmsa.apple.com":
                 if parts.path.endswith(("/securitycode", "/bridge/code/validate")):
                     flow.phase = "verify_code"
@@ -285,7 +291,6 @@ class AppleLoginManager:
                     flow.code_accepted = True
             elif parts.hostname in ("setup.icloud.com", "setup.icloud.com.cn"):
                 flow.phase = "open_session"
-                flow.host = parts.hostname.removeprefix("setup.")
             flow.http_status = 0
             remaining = min(flow.expires, flow.deadline) - time.monotonic()
             kwargs["timeout"] = (min(10, remaining), min(20, remaining))
@@ -367,7 +372,7 @@ class AppleLoginManager:
         cookies = {}
         for cookie in sorted(flow.client.session.cookies, key=lambda c: len(c.domain)):
             domain = cookie.domain.lstrip(".").lower()
-            if domain in ("icloud.com", "icloud.com.cn") or domain.endswith((".icloud.com", ".icloud.com.cn")):
+            if domain == flow.host or domain.endswith("." + flow.host):
                 cookies[cookie.name] = cookie.value
         if not cookies:
             raise LoginError("Apple 登录尚未生成 iCloud 会话，请在 iCloud 官方网站完成账号初始化后重试。")

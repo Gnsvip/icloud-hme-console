@@ -41,6 +41,7 @@ describe("Apple login", () => {
   it("submits password then code, polls completion and includes the selected account", async () => {
     const done = vi.fn();
     render(<AppleLoginForm close={vi.fn()} done={done} account={{ id: "selected", host: "icloud.com.cn" }} />);
+    fireEvent.change(screen.getByLabelText(/账号区域/), { target: { value: "icloud.com.cn" } });
     await signIn();
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({
       apple_id: "demo@example.test", password: "synthetic-password", host: "icloud.com.cn", account_id: "selected",
@@ -55,6 +56,13 @@ describe("Apple login", () => {
     expect(done).toHaveBeenCalledTimes(1);
     await poll();
     expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, { id: "selected", host: "icloud.com.cn" }])("defaults to international even when reconnecting %j", async (account) => {
+    render(<AppleLoginForm close={vi.fn()} done={vi.fn()} account={account} />);
+    expect((screen.getByLabelText(/账号区域/) as HTMLSelectElement).value).toBe("icloud.com");
+    await signIn();
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).host).toBe("icloud.com");
   });
 
   it("shows SMS guidance and allows retrying an incorrect code", async () => {

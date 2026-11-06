@@ -102,7 +102,7 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
         }}>
           <div className="form-grid">
             <Field label="账号名称"><input name="name" defaultValue={account?.name || ""} placeholder="可选，例如：个人账号" disabled={busy} /></Field>
-            <Field label="账号区域"><select name="host" defaultValue={account?.host || "icloud.com"} disabled={busy}>
+            <Field label="账号区域" hint="按所选区域连接，不自动切换。"><select name="host" defaultValue="icloud.com" disabled={busy}>
               <option value="icloud.com">国际区 iCloud</option><option value="icloud.com.cn">中国区 iCloud</option>
             </select></Field>
           </div>
