@@ -69,7 +69,9 @@ python web_ui.py --host 127.0.0.1 --port 5050
 
 Apple 登录密码用于连接账号；**App 专用密码用于 IMAP 收件**，需要在账号设置中另行填写，两者不能互换。尚未开通 iCloud+ 的账号可以先登录，工作台会提示开通或使用家庭共享后重新校验。
 
-登录通过第三方 [pyicloud](https://github.com/timlaing/pyicloud) 组件连接 Apple，并在导入前独立校验 iCloud 会话。安全密钥、旧版两步验证和需要确认条款的账号暂不支持直接完成，可点击「改用 Cookie 导入」使用手动 Cookie 或 [Cookie 助手](cookie-helper-extension/README.txt)。Apple 登录协议可能变化；当前已完成模拟回归与库适配测试，尚未使用真实 Apple 账号完成端到端验证。
+遇到 Apple 条款更新时，工作台会显示本次登录返回的条款全文和版本，以及需要单独确认的隐私告知。阅读后主动勾选并点击「同意并继续」才会提交确认；条款更新或缺失时不会自动接受，可以取消或重新加载。
+
+登录通过第三方 [pyicloud](https://github.com/timlaing/pyicloud) 组件连接 Apple，并在导入前独立校验 iCloud 会话。安全密钥和旧版两步验证暂不支持直接完成，可点击「改用 Cookie 导入」使用手动 Cookie 或 [Cookie 助手](cookie-helper-extension/README.txt)。Apple 登录协议可能变化；当前已完成模拟回归与库适配测试，尚未使用真实 Apple 账号完成端到端验证。
 
 「家庭共享与 iCloud+」卡片提供 [加入家庭](https://support.apple.com/zh-cn/108380) 与 [付费开通 iCloud+](https://support.apple.com/zh-cn/108349) 的官方步骤。接受邀请和支付由 Apple 的设备/客户端流程完成，本项目不自动接受家庭邀请或购买订阅。完成后点击账号「校验」更新隐藏邮件地址服务状态。
 

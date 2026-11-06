@@ -4,6 +4,11 @@ import { AppleLoginForm } from "./pages/AppleLogin";
 import { AccountForm } from "./pages/Accounts";
 
 const flow = { ok: true, flow_id: "synthetic-flow", state: "awaiting_code", delivery: "trusted_device" };
+const termsFlow = { ...flow, state: "awaiting_terms", terms: {
+  document_id: "reviewed-document", version: 7, title: "测试条款", summary: "请阅读条款全文。",
+  content: "第一条：这是模拟测试的条款全文。\n第二条：同意前可取消。",
+  privacy_required: true, privacy_title: "测试隐私告知", privacy_content: "这是单独的隐私告知。",
+} };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
   status, headers: { "content-type": "application/json" },
 });
@@ -28,6 +33,46 @@ async function verify() {
 async function poll() { await act(async () => { await vi.advanceTimersByTimeAsync(1500); }); }
 
 describe("Apple login", () => {
+  it("shows terms inline and requires separate unchecked consents before continuing", async () => {
+    fetcher.mockResolvedValueOnce(json(termsFlow));
+    render(<AppleLoginForm close={vi.fn()} done={vi.fn()} />);
+    await signIn();
+    expect(screen.getByRole("region", { name: "iCloud 条款全文" }).textContent).toContain("第二条");
+    const accept = screen.getByRole("button", { name: "同意并继续" }) as HTMLButtonElement;
+    const checks = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    expect(checks.every((input) => !input.checked)).toBe(true);
+    expect(accept.disabled).toBe(true);
+    fireEvent.click(checks[0]);
+    expect(accept.disabled).toBe(true);
+    fireEvent.click(checks[1]);
+    expect(accept.disabled).toBe(false);
+    const count = fetcher.mock.calls.length;
+    await poll();
+    expect(fetcher.mock.calls.length).toBe(count);
+    fetcher.mockResolvedValueOnce(json({ ...flow, state: "accepting_terms" }));
+    await act(async () => { fireEvent.click(accept); });
+    expect(fetcher.mock.calls.at(-1)?.[0]).toBe("/api/apple-login/synthetic-flow/terms/accept");
+    expect(JSON.parse(fetcher.mock.calls.at(-1)?.[1].body)).toEqual({ accepted: true, privacy_accepted: true, document_id: "reviewed-document" });
+    fetcher.mockResolvedValueOnce(json({ ...termsFlow, terms: { ...termsFlow.terms, document_id: "updated-document", version: 8 } }));
+    await poll();
+    expect((screen.getByRole("button", { name: "同意并继续" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getAllByRole("checkbox") as HTMLInputElement[]).every((input) => !input.checked)).toBe(true);
+  });
+
+  it("retries missing terms and lets the user decline without submitting acceptance", async () => {
+    fetcher.mockResolvedValueOnce(json({ ...termsFlow, terms: null, error: "请重新加载" }));
+    const close = vi.fn();
+    render(<AppleLoginForm close={close} done={vi.fn()} />);
+    await signIn();
+    expect(screen.queryByRole("button", { name: "同意并继续" })).toBeNull();
+    fetcher.mockResolvedValueOnce(json(termsFlow));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新加载条款" })); });
+    expect(fetcher.mock.calls.at(-1)?.[0]).toBe("/api/apple-login/synthetic-flow/terms/reload");
+    fireEvent.click(screen.getByRole("button", { name: "不同意并取消" }));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/terms/accept"))).toBe(false);
+  });
+
   it("defaults to account login and keeps Cookie import as a fallback", () => {
     render(<AccountForm close={vi.fn()} done={vi.fn()} />);
     expect(screen.getByLabelText("Apple 账号")).toBeTruthy();

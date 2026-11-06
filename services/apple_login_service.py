@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 import requests
+from pyicloud.exceptions import PyiCloudAcceptTermsException, PyiCloud2FARequiredException
 
 from icloud_hme import ICloudHME, configure_icloud_proxy
+from services.apple_terms import terms_document
 
 
 class LoginError(Exception):
@@ -52,6 +54,8 @@ class LoginFlow:
     http_status: int = 0
     code_accepted: bool = False
     resume_step: str = ""
+    terms: dict | None = None
+    terms_pending: bool = False
     lock: object = field(default_factory=threading.RLock)
 
 
@@ -128,6 +132,7 @@ class AppleLoginManager:
 
     @staticmethod
     def _dispose(flow):
+        flow.terms = None
         client, temporary = flow.client, flow.temporary
         if client is not None:
             client._password_raw = None
@@ -201,7 +206,8 @@ class AppleLoginManager:
             return {"ok": True, "flow_id": flow.id, "state": flow.state,
                     "error": flow.error, "delivery": flow.delivery,
                     "expires_in": max(0, int(flow.expires - time.monotonic())),
-                    "account": flow.account}
+                    "account": flow.account,
+                    "terms": flow.terms if flow.state == "awaiting_terms" else None}
 
     def cancel(self, flow_id):
         with self.lock:
@@ -238,6 +244,34 @@ class AppleLoginManager:
             self.pool.submit(self._run, flow, lambda: self._resume(flow))
         return self.status(flow.id)
 
+    def reload_terms(self, flow_id):
+        flow = self._lookup(flow_id)
+        with flow.lock:
+            if flow.busy or flow.state != "awaiting_terms" or not flow.terms_pending:
+                raise LoginError("当前登录步骤不能加载条款。", 409)
+            flow.busy = True
+            flow.state = "loading_terms"
+            flow.error = ""
+            self.pool.submit(self._run, flow, lambda: self._load_terms(flow))
+        return self.status(flow.id)
+
+    def accept_terms(self, flow_id, data):
+        flow = self._lookup(flow_id)
+        with flow.lock:
+            if flow.busy or flow.state != "awaiting_terms" or not flow.terms:
+                raise LoginError("请先加载并阅读本次登录的条款。", 409)
+            if data.get("accepted") is not True:
+                raise LoginError("请阅读条款并明确勾选同意。")
+            if data.get("document_id") != flow.terms["document_id"]:
+                raise LoginError("条款已更新，请重新阅读后确认。", 409)
+            if flow.terms["privacy_required"] and data.get("privacy_accepted") is not True:
+                raise LoginError("请阅读并确认隐私告知。")
+            flow.busy = True
+            flow.state = "accepting_terms"
+            flow.error = ""
+            self.pool.submit(self._run, flow, lambda: self._accept_terms(flow))
+        return self.status(flow.id)
+
     @staticmethod
     def _check(flow):
         if flow.cancelled or time.monotonic() >= min(flow.expires, flow.deadline):
@@ -247,7 +281,11 @@ class AppleLoginManager:
         flow.deadline = min(flow.expires, time.monotonic() + 90)
         try:
             self._check(flow)
-            operation()
+            try:
+                operation()
+            except PyiCloudAcceptTermsException:
+                flow.terms_pending = True
+                self._load_terms(flow)
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 "Apple login failed phase=%s region=%s error=%s http_status=%s",
@@ -257,7 +295,10 @@ class AppleLoginManager:
                 if not flow.cancelled:
                     flow.state = "failed"
                     flow.error = public_error(exc)
-                    if flow.code_accepted and connection_error(exc) and time.monotonic() < flow.expires:
+                    if flow.terms_pending and flow.phase in ("load_terms", "accept_terms"):
+                        flow.state = "awaiting_terms"
+                        flow.error = str(exc) if isinstance(exc, LoginError) else "条款加载或确认未完成，请重试；也可以取消本次登录。"
+                    elif flow.code_accepted and connection_error(exc) and time.monotonic() < flow.expires:
                         region = "中国区" if flow.host == "icloud.com.cn" else "国际区"
                         flow.state = "awaiting_connection"
                         flow.resume_step = "finish" if flow.phase == "validate_session" else "trust"
@@ -291,7 +332,7 @@ class AppleLoginManager:
                     flow.phase = "trust_session"
                     flow.code_accepted = True
             elif parts.hostname in ("setup.icloud.com", "setup.icloud.com.cn"):
-                flow.phase = "open_session"
+                flow.phase = "load_terms" if parts.path.endswith("/getTerms") else "accept_terms" if parts.path.endswith("/repairDone") else "open_session"
             flow.http_status = 0
             remaining = min(flow.expires, flow.deadline) - time.monotonic()
             kwargs["timeout"] = (min(10, remaining), min(20, remaining))
@@ -307,6 +348,9 @@ class AppleLoginManager:
 
         flow.client.session.send = bounded_send
         flow.client.authenticate()
+        self._after_authenticate(flow)
+
+    def _after_authenticate(self, flow):
         self._check(flow)
         if flow.client.requires_2fa:
             self._await_code(flow)
@@ -314,6 +358,64 @@ class AppleLoginManager:
         if flow.client.requires_2sa:
             raise LoginError("此账号使用旧版两步验证，请使用 Cookie 导入。")
         self._finish(flow)
+
+    def _fetch_terms(self, flow):
+        self._check(flow)
+        flow.phase = "load_terms"
+        response = flow.client.session.post(
+            f"https://setup.{flow.host}/setup/ws/1/getTerms",
+            params=flow.client.params, json={"locale": "zh_CN"},
+        )
+        response.raise_for_status()
+        try:
+            return terms_document(response.json(), flow.client.data.get("showGcbdPrivacyNotice", False))
+        except ValueError:
+            raise LoginError("Apple 未返回完整的条款或隐私告知，请重新加载。") from None
+
+    def _load_terms(self, flow):
+        with flow.lock:
+            self._check(flow)
+            flow.state = "loading_terms"
+            flow.terms = None
+        document = self._fetch_terms(flow)
+        with flow.lock:
+            self._check(flow)
+            flow.terms = document
+            flow.state = "awaiting_terms"
+            flow.error = ""
+
+    def _accept_terms(self, flow):
+        reviewed = flow.terms
+        current = self._fetch_terms(flow)
+        if current["document_id"] != reviewed["document_id"]:
+            with flow.lock:
+                self._check(flow)
+                flow.terms = current
+                flow.state = "awaiting_terms"
+                flow.error = "Apple 的条款已更新，请重新阅读并确认。"
+            return
+        self._check(flow)
+        flow.phase = "accept_terms"
+        payload = {"acceptedICloudTerms": reviewed["version"]}
+        if reviewed["privacy_required"]:
+            payload["gcbdPrivacyNoticeAccepted"] = True
+        response = flow.client.session.post(
+            f"https://setup.{flow.host}/setup/ws/1/repairDone",
+            params=flow.client.params, json=payload,
+        )
+        response.raise_for_status()
+        if response.json().get("success") is not True:
+            raise LoginError("Apple 尚未确认接受条款，请重试。")
+        self._check(flow)
+        flow.terms_pending = False
+        flow.terms = None
+        flow.phase = "open_session"
+        try:
+            flow.client._authenticate_with_token()
+        except PyiCloud2FARequiredException:
+            if not flow.client.requires_2fa:
+                raise
+        self._after_authenticate(flow)
 
     def _await_code(self, flow):
         if flow.client.two_factor_delivery_method == "security_key":

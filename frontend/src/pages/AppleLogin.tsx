@@ -8,12 +8,45 @@ const progress: Record<string, string> = {
   verifying: "正在验证验证码…",
   connecting: "验证码已通过，正在继续连接 iCloud…",
   importing: "正在校验 iCloud 会话并连接工作台…",
+  loading_terms: "正在读取 Apple 为本次登录提供的条款…",
+  accepting_terms: "正在向 Apple 提交你的确认并继续连接…",
 };
 const codeGuidance: Record<string, string> = {
   sms: "请输入 Apple 发到受信任手机号的短信验证码。",
   trusted_device: "请在受信任的 Apple 设备上允许这次登录，再输入六位验证码。",
   trusted_device_manual: "请输入受信任 Apple 设备上已经显示的六位验证码。请使用当前这次登录的验证码。",
 };
+
+function AppleTerms({ terms, busy, accept }: { terms: Row; busy: boolean; accept: (data: Row) => Promise<void> }) {
+  const [agreed, setAgreed] = useState(false);
+  const [privacyAgreed, setPrivacyAgreed] = useState(false);
+  return <form className="form-stack" onSubmit={(e) => {
+    e.preventDefault();
+    if (agreed && (!terms.privacy_required || privacyAgreed)) {
+      void accept({ document_id: terms.document_id, accepted: true, privacy_accepted: privacyAgreed });
+    }
+  }}>
+    <div>
+      <h3>{terms.title}</h3>
+      <p className="apple-terms-source">Apple 提供 · 版本 {terms.version}</p>
+      {terms.summary && <p>{terms.summary}</p>}
+    </div>
+    <div className="apple-terms-reader" role="region" aria-label="iCloud 条款全文" tabIndex={0}>
+      {terms.content}
+    </div>
+    {terms.privacy_required && <section className="apple-terms-privacy">
+      <h4>{terms.privacy_title || "隐私告知"}</h4>
+      <p>{terms.privacy_content}</p>
+    </section>}
+    <label className="apple-terms-check"><input type="checkbox" checked={agreed} disabled={busy} onChange={(e) => setAgreed(e.target.checked)} />
+      <span>我已阅读并同意以上 iCloud 条款</span>
+    </label>
+    {terms.privacy_required && <label className="apple-terms-check"><input type="checkbox" checked={privacyAgreed} disabled={busy} onChange={(e) => setPrivacyAgreed(e.target.checked)} />
+      <span>我已阅读并同意以上隐私告知</span>
+    </label>}
+    <Submit busy={busy} disabled={!agreed || (terms.privacy_required && !privacyAgreed)}>同意并继续</Submit>
+  </form>;
+}
 
 export function AppleLoginForm({ close, done, useCookie, account }: {
   close: () => void;
@@ -41,7 +74,7 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
   }, []);
 
   useEffect(() => {
-    if (busy || !flow || flow.state === "failed" || flow.state === "complete") return;
+    if (busy || !flow || ["failed", "complete", "awaiting_terms"].includes(flow.state)) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -77,8 +110,21 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
     setError(null);
     completed.current = false;
   };
+  const termsAction = async (action: "accept" | "reload", data: Row = {}) => {
+    setBusy(true); setError(null);
+    try {
+      const next = await post(`/api/apple-login/${enc(flowId.current)}/terms/${action}`, data);
+      if (mounted.current && flowId.current === next.flow_id) setFlow(next);
+    } catch (err) {
+      if (mounted.current) {
+        setError(err);
+        if (err.status === 410) setFlow((old) => old ? { ...old, state: "failed" } : old);
+      }
+    } finally { if (mounted.current) setBusy(false); }
+  };
+  const showingTerms = flow && ["awaiting_terms", "loading_terms", "accepting_terms"].includes(flow.state);
   return (
-    <Modal title="登录 Apple 账号" description="输入账号、登录密码和验证码，直接连接 iCloud，无需浏览器插件。" close={close}>
+    <Modal title={showingTerms ? "阅读并确认 iCloud 条款" : "登录 Apple 账号"} description={showingTerms ? "请阅读 Apple 提供的完整条款，自行选择是否同意并继续。" : "输入账号、登录密码和验证码，直接连接 iCloud，无需浏览器插件。"} close={close} wide={!!showingTerms}>
       {!flow ? (
         <form className="form-stack" onSubmit={async (e) => {
           e.preventDefault();
@@ -138,6 +184,9 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
             </form>
           )}
           <ErrorNotice error={error || flow.error} />
+          {flow.state === "awaiting_terms" && (flow.terms ? (
+            <AppleTerms key={flow.terms.document_id} terms={flow.terms} busy={busy} accept={(data) => termsAction("accept", data)} />
+          ) : <Button disabled={busy} onClick={() => void termsAction("reload")}>重新加载条款</Button>)}
           {flow.state === "awaiting_connection" && (
             <form onSubmit={async (e) => {
               e.preventDefault();
@@ -151,7 +200,7 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
           )}
           <div className="form-actions">
             <Button variant="outline" disabled={busy} onClick={restart}>重新登录</Button>
-            <Button variant="ghost" onClick={close}>取消登录</Button>
+            <Button variant="ghost" onClick={close}>{showingTerms ? "不同意并取消" : "取消登录"}</Button>
           </div>
         </div>
       )}

@@ -37,3 +37,13 @@ def verify(flow_id):
 @bp.route("/api/apple-login/<flow_id>/resume", methods=["POST"])
 def resume(flow_id):
     return jsonify(manager.resume(flow_id)), 202
+
+
+@bp.route("/api/apple-login/<flow_id>/terms/reload", methods=["POST"])
+def reload_terms(flow_id):
+    return jsonify(manager.reload_terms(flow_id)), 202
+
+
+@bp.route("/api/apple-login/<flow_id>/terms/accept", methods=["POST"])
+def accept_terms(flow_id):
+    return jsonify(manager.accept_terms(flow_id, body())), 202

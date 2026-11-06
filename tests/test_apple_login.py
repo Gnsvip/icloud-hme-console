@@ -1,4 +1,5 @@
 """Apple sign-in contract tests. All identities and responses are synthetic."""
+import base64
 import concurrent.futures
 import json
 import threading
@@ -577,7 +578,9 @@ def test_routes_require_admin_and_handle_invalid_json_and_expired_flow(rig, monk
     client = app.test_client()
     for method, path in [("post", "/api/apple-login"), ("get", "/api/apple-login/missing"),
                          ("delete", "/api/apple-login/missing"), ("post", "/api/apple-login/missing/verify"),
-                         ("post", "/api/apple-login/missing/resume")]:
+                         ("post", "/api/apple-login/missing/resume"),
+                         ("post", "/api/apple-login/missing/terms/reload"),
+                         ("post", "/api/apple-login/missing/terms/accept")]:
         assert getattr(client, method)(path, json={}).status_code == 401
     with app.app_context():
         client.set_cookie(app_core.ADMIN_SESSION_COOKIE, app_core._admin_token())
@@ -592,3 +595,130 @@ def test_routes_require_admin_and_handle_invalid_json_and_expired_flow(rig, monk
     idle(rig.manager, flow.id)
     assert client.delete(f"/api/apple-login/{flow.id}").status_code == 200
     assert client.get(f"/api/apple-login/{flow.id}").status_code == 410
+
+
+def apple_terms(version=7, content="<h2>测试条款</h2><p>这是模拟条款正文。</p>", privacy=True):
+    encoded = lambda value: base64.b64encode(value.encode()).decode()
+    data = {"country": "CHN", "locale": "zh_CN", "iCloudTerms": {
+        "version": version, "type": "iCloudTerms", "title": encoded("测试 iCloud 条款"),
+        "summary": encoded("请阅读完整条款。"), "content": encoded(content),
+    }}
+    if privacy:
+        data.update(gcbdPrivacyNoticeTitle="测试隐私告知", gcbdPrivacyNoticeMessage="这是单独的模拟隐私告知。")
+    return data
+
+
+def terms_login(rig, tmp_path, document=None, failure=None):
+    document = document or apple_terms()
+    setup = "https://setup.icloud.com.cn/setup/ws/1/"
+    responses = [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP_CN, 200, {"termsUpdateNeeded": True, "showGcbdPrivacyNotice": bool(document.get("gcbdPrivacyNoticeMessage")), "dsInfo": IDENTITY}),
+        (setup + "getTerms", failure or 200, document),
+    ]
+    client, calls = scripted_apple(rig, tmp_path, responses, "icloud.com.cn")
+    client.params = {}
+    flow = start(rig, host="icloud.com.cn")
+    rig.manager.verify(flow.id, "123456")
+    idle(rig.manager, flow.id)
+    return flow, responses, calls, setup
+
+
+def consent(flow):
+    return {"accepted": True, "privacy_accepted": True, "document_id": flow.terms["document_id"]}
+
+
+def test_terms_are_read_in_workbench_and_only_accepted_after_explicit_consent(rig, tmp_path):
+    flow, responses, calls, setup = terms_login(rig, tmp_path)
+    assert flow.state == "awaiting_terms" and flow.client is not None
+    assert "模拟条款正文" in rig.manager.status(flow.id)["terms"]["content"]
+    assert flow.terms["privacy_required"]
+    assert not any("repairDone" in call.url for call in calls)
+    assert calls[-1].method == "POST"
+    assert json.loads(calls[-1].body) == {"locale": "zh_CN"}
+    responses.extend([
+        (setup + "getTerms", 200, apple_terms()),
+        (setup + "repairDone", 200, {"success": True}),
+        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+    ])
+    rig.manager.accept_terms(flow.id, consent(flow))
+    assert idle(rig.manager, flow.id).state == "complete"
+    repair = [call for call in calls if "repairDone" in call.url]
+    assert len(repair) == 1 and repair[0].method == "POST"
+    assert json.loads(repair[0].body) == {"acceptedICloudTerms": 7, "gcbdPrivacyNoticeAccepted": True}
+    assert sum("/securitycode" in call.url for call in calls) == 1
+    assert flow.terms is None and flow.host == "icloud.com.cn" and not responses
+
+
+@pytest.mark.parametrize("changes", [{"accepted": False}, {"accepted": "true"}, {"privacy_accepted": False}, {"document_id": "other"}])
+def test_terms_reject_missing_consent_or_other_document_without_contacting_apple(rig, tmp_path, changes):
+    flow, _, calls, _ = terms_login(rig, tmp_path)
+    count = len(calls)
+    with pytest.raises(login.LoginError):
+        rig.manager.accept_terms(flow.id, {**consent(flow), **changes})
+    assert len(calls) == count and flow.state == "awaiting_terms"
+
+
+def test_changed_terms_require_new_consent_even_with_same_version(rig, tmp_path):
+    flow, responses, calls, setup = terms_login(rig, tmp_path)
+    old_id = flow.terms["document_id"]
+    responses.append((setup + "getTerms", 200, apple_terms(content="<p>已修改的条款正文。</p>")))
+    rig.manager.accept_terms(flow.id, consent(flow))
+    assert idle(rig.manager, flow.id).state == "awaiting_terms"
+    assert flow.terms["document_id"] != old_id and "重新阅读" in flow.error
+    assert not any("repairDone" in call.url for call in calls)
+
+
+def test_terms_network_failure_can_reload_without_repeating_login_or_code(rig, tmp_path):
+    flow, responses, calls, setup = terms_login(rig, tmp_path, failure=requests.Timeout())
+    assert flow.state == "awaiting_terms" and flow.terms is None and flow.client is not None
+    responses.append((setup + "getTerms", 200, apple_terms()))
+    rig.manager.reload_terms(flow.id)
+    assert idle(rig.manager, flow.id).state == "awaiting_terms" and flow.terms
+    assert sum("/securitycode" in call.url for call in calls) == 1
+
+
+@pytest.mark.parametrize("action", ["cancel", "expire", "busy"])
+def test_cancelled_expired_or_busy_flow_cannot_accept_terms(rig, tmp_path, action):
+    flow, _, calls, _ = terms_login(rig, tmp_path)
+    data = consent(flow)
+    count = len(calls)
+    if action == "cancel":
+        rig.manager.cancel(flow.id)
+    elif action == "expire":
+        flow.expires = 0
+    else:
+        flow.busy = True
+    try:
+        with pytest.raises(login.LoginError):
+            rig.manager.accept_terms(flow.id, data)
+        assert len(calls) == count
+    finally:
+        flow.busy = False
+
+
+def test_rejected_terms_acceptance_does_not_import_account(rig, tmp_path):
+    flow, responses, _, setup = terms_login(rig, tmp_path)
+    responses.extend([(setup + "getTerms", 200, apple_terms()), (setup + "repairDone", 200, {"success": False})])
+    rig.manager.accept_terms(flow.id, consent(flow))
+    assert idle(rig.manager, flow.id).state == "awaiting_terms"
+    assert "尚未确认" in flow.error and not rig.accounts.accounts
+
+
+def test_terms_decode_full_document_without_active_html_or_upstream_secrets():
+    from services.apple_terms import terms_document
+    data = apple_terms(content='<style>hidden-style</style><script>secret-script</script><p>完整正文 &amp; 内容</p><ol><li>第一项</li><li>第二项</li></ol><a href="https://www.apple.com/privacy/">隐私政策</a>' + '<p>正文末尾</p>' * 300)
+    data["session_token"] = "not-for-browser"
+    result = terms_document(data)
+    assert "完整正文 & 内容" in result["content"]
+    assert "1. 第一项" in result["content"] and "2. 第二项" in result["content"]
+    assert "https://www.apple.com/privacy/" in result["content"]
+    assert result["content"].count("正文末尾") == 300
+    assert all(value not in json.dumps(result) for value in ("hidden-style", "secret-script", "not-for-browser", "<script>"))
+
+
+def test_incomplete_required_privacy_notice_cannot_be_accepted():
+    from services.apple_terms import terms_document
+    with pytest.raises(ValueError):
+        terms_document(apple_terms(privacy=False), privacy_required=True)

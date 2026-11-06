@@ -1064,6 +1064,38 @@ tr[data-selected="true"] {
 .modal-wide {
   max-width: 680px !important;
 }
+.apple-terms-source {
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  margin: 4px 0 12px;
+}
+.apple-terms-reader {
+  max-height: min(40vh, 380px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 0.9375rem;
+  line-height: 1.8;
+}
+.apple-terms-privacy p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+  max-height: 22vh;
+  overflow: auto;
+}
+.apple-terms-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.apple-terms-check input {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
 .action-list {
   display: grid;
   gap: 4px;
