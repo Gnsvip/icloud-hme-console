@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from icloud_hme import ICloudHME
+from icloud_hme import ICloudHME, configure_icloud_proxy
 
 
 class LoginError(Exception):
@@ -82,6 +82,7 @@ def create_client(apple_id, password, directory, host):
         china_mainland=host == "icloud.com.cn", authenticate=False,
         with_family=False, accept_terms=False, verify=True,
     )
+    configure_icloud_proxy(client.session)
     return client
 
 

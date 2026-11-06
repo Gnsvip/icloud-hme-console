@@ -218,6 +218,19 @@ def _decrypt_chrome_value(encrypted_value: bytes, key: bytes) -> Optional[str]:
 # iCloud HME API 客户端
 # ============================================================
 
+def configure_icloud_proxy(session):
+    """Apply the dedicated Apple HTTP route without changing other clients."""
+    proxy = os.environ.get("ICLOUD_PROXY_URL", "").strip()
+    if not proxy:
+        return
+    parsed = urlparse(proxy)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("ICLOUD_PROXY_URL 必须是有效的 HTTP 或 HTTPS 代理地址。")
+    session.proxies.update({"http": proxy, "https": proxy})
+    # A machine-wide proxy must not override this service-specific route.
+    session.trust_env = False
+
+
 class ICloudHME:
     """iCloud Hide My Email 客户端"""
 
@@ -226,6 +239,7 @@ class ICloudHME:
         self.host = self._normalize_host(host)
         self.verbose = verbose
         self.session = requests.Session()
+        configure_icloud_proxy(self.session)
         self.session.cookies.update(cookies)
         self._setup_url: Optional[str] = None
         self._service_url: Optional[str] = None
