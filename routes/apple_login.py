@@ -32,3 +32,8 @@ def status(flow_id):
 @bp.route("/api/apple-login/<flow_id>/verify", methods=["POST"])
 def verify(flow_id):
     return jsonify(manager.verify(flow_id, body().get("code"))), 202
+
+
+@bp.route("/api/apple-login/<flow_id>/resume", methods=["POST"])
+def resume(flow_id):
+    return jsonify(manager.resume(flow_id)), 202

@@ -84,6 +84,22 @@ describe("Apple login", () => {
     expect((screen.getByLabelText("六位验证码") as HTMLInputElement).disabled).toBe(false);
   });
 
+  it("continues a connection failure without asking for another code", async () => {
+    fetcher.mockResolvedValueOnce(json({ ...flow, state: "awaiting_connection", error: "验证码已通过，连接暂时中断" }));
+    const done = vi.fn();
+    render(<AppleLoginForm close={vi.fn()} done={done} />);
+    await signIn();
+    expect(screen.queryByLabelText("六位验证码")).toBeNull();
+    fetcher.mockResolvedValueOnce(json({ ...flow, state: "connecting" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "继续连接" })); });
+    expect(fetcher.mock.calls.at(-1)?.[0]).toBe("/api/apple-login/synthetic-flow/resume");
+    expect(JSON.parse(fetcher.mock.calls.at(-1)?.[1].body)).toEqual({});
+    expect(screen.getByRole("status").textContent).toContain("继续连接");
+    fetcher.mockResolvedValueOnce(json({ ...flow, state: "complete", account: { status: "active" } }));
+    await poll();
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
   it("stops polling an expired flow and can restart", async () => {
     render(<AppleLoginForm close={vi.fn()} done={vi.fn()} />);
     await signIn();

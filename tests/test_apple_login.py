@@ -268,6 +268,147 @@ def test_real_library_unknown_delivery_verifies_existing_device_code(rig, tmp_pa
     client.trust_session.assert_called_once()
 
 
+def scripted_apple(rig, tmp_path, responses):
+    """Exercise pyicloud's real verification/trust/token methods, not mocks."""
+    client = login.create_client(INPUT["apple_id"], INPUT["password"], str(tmp_path), "icloud.com")
+    client.authenticate = Mock()
+    client._requires_mfa = True
+    client.session.data.update(session_token="synthetic-session", account_country="CHN")
+    client.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "synthetic-cookie", domain=".icloud.com.cn")
+    calls = []
+
+    def send(request, **kwargs):
+        calls.append(request)
+        expected, status, body = responses.pop(0)
+        assert request.url == expected
+        if isinstance(status, Exception):
+            raise status
+        response = requests.Response()
+        response.status_code = status
+        response._content = json.dumps(body).encode() if body is not None else b""
+        response.headers["Content-Type"] = "application/json"
+        response.url = request.url
+        response.request = request
+        return response
+
+    client.session.send = send
+    rig.manager.client_factory = lambda *args: client
+    return client, calls
+
+
+AUTH = "https://idmsa.apple.com/appleauth/auth"
+SETUP = "https://setup.icloud.com/setup/ws/1/accountLogin"
+SETUP_CN = "https://setup.icloud.com.cn/setup/ws/1/accountLogin"
+
+
+def test_real_library_follows_apple_region_redirect_after_accepting_code(rig, tmp_path):
+    responses = [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, 302, {"domainToUse": "iCloud.com.cn"}),
+        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+    ]
+    client, calls = scripted_apple(rig, tmp_path, responses)
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "complete"
+    assert flow.code_accepted and flow.attempts == 0
+    assert flow.host == "icloud.com.cn" and client.is_china_mainland
+    assert calls[-1].headers["Origin"] == "https://www.icloud.com.cn"
+    assert rig.verifier_factory.call_args.kwargs["host"] == "icloud.com.cn"
+    assert not responses
+
+
+@pytest.mark.parametrize("failure", [403, requests.ReadTimeout("secret response")])
+def test_real_library_session_failure_is_not_reported_as_an_incorrect_code(rig, tmp_path, failure):
+    scripted_apple(rig, tmp_path, [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", failure, {}),
+    ])
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    idle(rig.manager, flow.id)
+    assert flow.state == ("awaiting_connection" if isinstance(failure, Exception) else "failed")
+    assert flow.attempts == 0
+    assert "验证码已通过" in flow.error
+    assert "secret" not in flow.error
+    assert rig.accounts.accounts == {}
+
+
+def test_resume_after_region_connection_timeout_never_resubmits_the_code(rig, tmp_path):
+    responses = [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, 302, {"domainToUse": "icloud.com.cn"}),
+        (SETUP_CN, requests.ReadTimeout(), {}),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+    ]
+    _, calls = scripted_apple(rig, tmp_path, responses)
+    flow = start(rig)
+    with pytest.raises(login.LoginError):
+        rig.manager.resume(flow.id)
+    rig.manager.verify(flow.id, "123456")
+    idle(rig.manager, flow.id)
+    assert flow.state == "awaiting_connection" and flow.client is not None
+    assert flow.host == "icloud.com.cn"
+    rig.manager.resume(flow.id)
+    assert idle(rig.manager, flow.id).state == "complete"
+    assert sum("/securitycode" in call.url for call in calls) == 1
+    assert not responses
+
+
+def test_resume_cookie_check_only_does_not_repeat_apple_verification(rig):
+    flow = start(rig)
+    flow.code_accepted = True
+    rig.verifier.validate_session.side_effect = [TimeoutError(), {}]
+    rig.manager.verify(flow.id, "123456")
+    idle(rig.manager, flow.id)
+    assert flow.state == "awaiting_connection" and flow.resume_step == "finish"
+    rig.manager.resume(flow.id)
+    assert idle(rig.manager, flow.id).state == "complete"
+    rig.apple.validate_2fa_code.assert_called_once()
+
+
+def test_cancelled_pending_connection_cannot_resume(rig):
+    flow = start(rig)
+    flow.code_accepted = True
+    rig.verifier.validate_session.side_effect = TimeoutError()
+    rig.manager.verify(flow.id, "123456")
+    idle(rig.manager, flow.id)
+    rig.manager.cancel(flow.id)
+    with pytest.raises(login.LoginError) as error:
+        rig.manager.resume(flow.id)
+    assert error.value.status == 410 and flow.client is None
+
+
+@pytest.mark.parametrize("target", ["https://example.test", "evilicloud.com.cn", "icloud.com"])
+def test_region_redirect_never_follows_arbitrary_hosts_or_loops(rig, tmp_path, target):
+    _, calls = scripted_apple(rig, tmp_path, [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, 302, {"domainToUse": target}),
+    ])
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "failed"
+    assert len(calls) == 3 and flow.attempts == 0
+    assert rig.accounts.accounts == {}
+
+
+def test_diagnostic_logs_include_stage_but_no_password_code_or_tokens(rig, tmp_path, caplog):
+    caplog.set_level("INFO", logger="services.apple_login_service")
+    scripted_apple(rig, tmp_path, [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", requests.ReadTimeout("secret response"), {}),
+    ])
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    idle(rig.manager, flow.id)
+    assert "phase=trust_session" in caplog.text
+    assert all(value not in caplog.text for value in ("123456", INPUT["apple_id"], INPUT["password"], "synthetic-session", "secret response"))
+
+
 def test_network_calls_are_bounded_and_expired_steps_cannot_continue(rig):
     send = Mock(return_value=Mock())
     rig.apple.session.send = send
@@ -371,7 +512,8 @@ def test_routes_require_admin_and_handle_invalid_json_and_expired_flow(rig, monk
     app.register_blueprint(apple_login.bp)
     client = app.test_client()
     for method, path in [("post", "/api/apple-login"), ("get", "/api/apple-login/missing"),
-                         ("delete", "/api/apple-login/missing"), ("post", "/api/apple-login/missing/verify")]:
+                         ("delete", "/api/apple-login/missing"), ("post", "/api/apple-login/missing/verify"),
+                         ("post", "/api/apple-login/missing/resume")]:
         assert getattr(client, method)(path, json={}).status_code == 401
     with app.app_context():
         client.set_cookie(app_core.ADMIN_SESSION_COOKIE, app_core._admin_token())

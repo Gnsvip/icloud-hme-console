@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 import requests
 
@@ -42,17 +43,50 @@ class LoginFlow:
     temporary: object = None
     deadline: float = 0
     account_id: str = ""
+    phase: str = "sign_in"
+    http_status: int = 0
+    code_accepted: bool = False
+    resume_step: str = ""
     lock: object = field(default_factory=threading.RLock)
 
 
 def create_client(apple_id, password, directory, host):
     from pyicloud import PyiCloudService
+    from pyicloud.exceptions import PyiCloud2FARequiredException
+
+    class RegionalClient(PyiCloudService):
+        def trust_session(self):
+            if not super().trust_session():
+                raise LoginError("验证码已通过，但 Apple 尚未建立受信任的 iCloud 会话，请在 iCloud 官方网页确认账号状态后重试。")
+            return True
+
+        def _authenticate_with_token(self, require_trust=True):
+            try:
+                return super()._authenticate_with_token(require_trust=require_trust)
+            except PyiCloud2FARequiredException as error:
+                response = error.response
+                target = str(self.data.get("domainToUse") or "").lower()
+                current = "icloud.com.cn" if self.is_china_mainland else "icloud.com"
+                if response is None or response.status_code != 302 or target not in ("icloud.com", "icloud.com.cn") or target == current:
+                    raise
+                # Apple, rather than the region dropdown, is authoritative for
+                # a migrated account. Follow its explicit region response once.
+                self._is_china_mainland = target == "icloud.com.cn"
+                self._setup_endpoints()
+                self.session.headers.update({"Origin": self._home_endpoint, "Referer": self._home_endpoint + "/"})
+                return super()._authenticate_with_token(require_trust=require_trust)
+
     # No keyring access, family-device discovery, or automatic terms acceptance.
-    return PyiCloudService(
+    client = RegionalClient(
         apple_id, password, cookie_directory=directory,
         china_mainland=host == "icloud.com.cn", authenticate=False,
         with_family=False, accept_terms=False, verify=True,
     )
+    return client
+
+
+def connection_error(error):
+    return isinstance(error, (TimeoutError, requests.ConnectionError, requests.Timeout)) or type(error).__name__ == "PyiCloudConnectionException"
 
 
 def public_error(error):
@@ -192,6 +226,17 @@ class AppleLoginManager:
             self.pool.submit(self._run, flow, lambda: self._verify(flow, code))
         return self.status(flow.id)
 
+    def resume(self, flow_id):
+        flow = self._lookup(flow_id)
+        with flow.lock:
+            if flow.busy or flow.state != "awaiting_connection" or not flow.code_accepted:
+                raise LoginError("当前登录步骤不能继续连接，请等待或重新登录。", 409)
+            flow.busy = True
+            flow.state = "connecting"
+            flow.error = ""
+            self.pool.submit(self._run, flow, lambda: self._resume(flow))
+        return self.status(flow.id)
+
     @staticmethod
     def _check(flow):
         if flow.cancelled or time.monotonic() >= min(flow.expires, flow.deadline):
@@ -203,10 +248,19 @@ class AppleLoginManager:
             self._check(flow)
             operation()
         except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Apple login failed phase=%s region=%s error=%s http_status=%s",
+                flow.phase, flow.host, type(exc).__name__, flow.http_status,
+            )
             with flow.lock:
                 if not flow.cancelled:
                     flow.state = "failed"
                     flow.error = public_error(exc)
+                    if flow.code_accepted and connection_error(exc) and time.monotonic() < flow.expires:
+                        region = "中国区" if flow.host == "icloud.com.cn" else "国际区"
+                        flow.state = "awaiting_connection"
+                        flow.resume_step = "finish" if flow.phase == "validate_session" else "trust"
+                        flow.error = f"验证码已通过，但连接{region} iCloud 暂时中断。请点击“继续连接”，无需重新输入验证码。"
         finally:
             with flow.lock:
                 flow.busy = False
@@ -220,9 +274,28 @@ class AppleLoginManager:
 
         def bounded_send(request, **kwargs):
             self._check(flow)
+            parts = urlsplit(str(getattr(request, "url", "")))
+            if parts.hostname == "idmsa.apple.com":
+                if parts.path.endswith(("/securitycode", "/bridge/code/validate")):
+                    flow.phase = "verify_code"
+                elif parts.path.endswith("/2sv/trust"):
+                    # The library reaches this endpoint only after accepting
+                    # the code. Later failures must not count as bad codes.
+                    flow.phase = "trust_session"
+                    flow.code_accepted = True
+            elif parts.hostname in ("setup.icloud.com", "setup.icloud.com.cn"):
+                flow.phase = "open_session"
+                flow.host = parts.hostname.removeprefix("setup.")
+            flow.http_status = 0
             remaining = min(flow.expires, flow.deadline) - time.monotonic()
             kwargs["timeout"] = (min(10, remaining), min(20, remaining))
             response = send(request, **kwargs)
+            flow.http_status = getattr(response, "status_code", 0)
+            if flow.phase in ("verify_code", "trust_session", "open_session"):
+                logging.getLogger(__name__).info(
+                    "Apple login response phase=%s region=%s http_status=%s",
+                    flow.phase, flow.host, flow.http_status,
+                )
             self._check(flow)
             return response
 
@@ -258,6 +331,12 @@ class AppleLoginManager:
         valid = flow.client.validate_2fa_code(code)
         self._check(flow)
         if not valid or flow.client.requires_2fa:
+            if flow.code_accepted:
+                raise LoginError("验证码已通过，但 Apple 尚未建立受信任的 iCloud 会话，请在 iCloud 官方网页确认账号状态后重试。")
+            if flow.http_status == 412:
+                raise LoginError("Apple 要求额外的账号确认，请先在 iCloud 官方网页完成提示的步骤，再回来登录。")
+            if flow.http_status == 429 or isinstance(flow.http_status, int) and flow.http_status >= 500:
+                raise LoginError("Apple 暂时无法完成验证，请稍后重新登录。")
             flow.attempts += 1
             if flow.attempts >= 5:
                 raise LoginError("验证码多次未通过，请重新登录后再试。")
@@ -273,6 +352,14 @@ class AppleLoginManager:
             return
         self._finish(flow)
 
+    def _resume(self, flow):
+        if flow.resume_step != "finish":
+            flow.phase = "trust_session"
+            if not flow.client.trust_session() or flow.client.requires_2fa:
+                raise LoginError("Apple 尚未建立受信任的 iCloud 会话，请在官方网页确认账号状态后重试。")
+            self._check(flow)
+        self._finish(flow)
+
     def _finish(self, flow):
         with flow.lock:
             self._check(flow)
@@ -285,6 +372,7 @@ class AppleLoginManager:
         if not cookies:
             raise LoginError("Apple 登录尚未生成 iCloud 会话，请在 iCloud 官方网站完成账号初始化后重试。")
         verifier = ICloudHME(cookies, host=flow.host, verbose=False)
+        flow.phase = "validate_session"
         try:
             data = verifier.validate_session(timeout=18, max_attempts=1, require_hme=False)
             info = verifier.get_account_info()

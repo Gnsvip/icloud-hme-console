@@ -6,7 +6,8 @@ import { Button, ErrorNotice, Field, Modal, Submit } from "@/components/common";
 const progress: Record<string, string> = {
   starting: "正在连接 Apple，请留意受信任设备上的登录提示…",
   verifying: "正在验证验证码…",
-  importing: "登录成功，正在连接邮箱工作台…",
+  connecting: "验证码已通过，正在继续连接 iCloud…",
+  importing: "正在校验 iCloud 会话并连接工作台…",
 };
 const codeGuidance: Record<string, string> = {
   sms: "请输入 Apple 发到受信任手机号的短信验证码。",
@@ -137,6 +138,17 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
             </form>
           )}
           <ErrorNotice error={error || flow.error} />
+          {flow.state === "awaiting_connection" && (
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              setBusy(true); setError(null);
+              try {
+                const next = await post(`/api/apple-login/${enc(flow.flow_id)}/resume`, {});
+                if (mounted.current && flowId.current === next.flow_id) setFlow(next);
+              } catch (err) { if (mounted.current) setError(err); }
+              finally { if (mounted.current) setBusy(false); }
+            }}><Submit busy={busy}>继续连接</Submit></form>
+          )}
           <div className="form-actions">
             <Button variant="outline" disabled={busy} onClick={restart}>重新登录</Button>
             <Button variant="ghost" onClick={close}>取消登录</Button>
