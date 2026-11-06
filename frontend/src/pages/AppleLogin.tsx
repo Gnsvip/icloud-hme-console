@@ -8,6 +8,11 @@ const progress: Record<string, string> = {
   verifying: "正在验证验证码…",
   importing: "登录成功，正在连接邮箱工作台…",
 };
+const codeGuidance: Record<string, string> = {
+  sms: "请输入 Apple 发到受信任手机号的短信验证码。",
+  trusted_device: "请在受信任的 Apple 设备上允许这次登录，再输入六位验证码。",
+  trusted_device_manual: "请输入受信任 Apple 设备上已经显示的六位验证码。请使用当前这次登录的验证码。",
+};
 
 export function AppleLoginForm({ close, done, useCookie, account }: {
   close: () => void;
@@ -126,7 +131,7 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
               catch (err) { if (mounted.current) setError(err); }
               finally { if (mounted.current) setBusy(false); }
             }}>
-              <p>{flow.delivery === "sms" ? "请输入 Apple 发到受信任手机号的短信验证码。" : "请在受信任的 Apple 设备上允许这次登录，再输入六位验证码。"}</p>
+              <p>{codeGuidance[flow.delivery] || codeGuidance.trusted_device}</p>
               <Field label="六位验证码"><input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required autoFocus disabled={busy} /></Field>
               <Submit busy={busy}>验证并连接</Submit>
             </form>

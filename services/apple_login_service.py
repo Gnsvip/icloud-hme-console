@@ -230,21 +230,29 @@ class AppleLoginManager:
         flow.client.authenticate()
         self._check(flow)
         if flow.client.requires_2fa:
-            flow.delivery = flow.client.two_factor_delivery_method
-            if flow.delivery == "security_key":
-                raise LoginError("此账号需要安全密钥，请使用 Cookie 导入。")
-            # authenticate() can suppress an initial code-delivery failure.
-            # This call is idempotent when a challenge was already delivered.
-            if not flow.client.request_2fa_code():
-                raise LoginError("Apple 尚未提供可用的验证码验证方式，请在官方页面检查账号后重试，或使用 Cookie 导入。")
-            self._check(flow)
-            with flow.lock:
-                flow.delivery = flow.client.two_factor_delivery_method
-                flow.state = "awaiting_code"
+            self._await_code(flow)
             return
         if flow.client.requires_2sa:
             raise LoginError("此账号使用旧版两步验证，请使用 Cookie 导入。")
         self._finish(flow)
+
+    def _await_code(self, flow):
+        if flow.client.two_factor_delivery_method == "security_key":
+            raise LoginError("此账号需要安全密钥，请使用 Cookie 导入。")
+        # A false delivery result does not mean the device has no code: Apple
+        # may have displayed it during sign-in without a supported resend route.
+        manual = flow.delivery == "trusted_device_manual"
+        if manual or not flow.client.request_2fa_code():
+            if flow.client.two_factor_delivery_method == "security_key":
+                raise LoginError("此账号需要安全密钥，请使用 Cookie 导入。")
+            flow.client.use_existing_trusted_device_code()
+            delivery = "trusted_device_manual"
+        else:
+            delivery = flow.client.two_factor_delivery_method
+        self._check(flow)
+        with flow.lock:
+            flow.delivery = delivery
+            flow.state = "awaiting_code"
 
     def _verify(self, flow, code):
         valid = flow.client.validate_2fa_code(code)
@@ -253,14 +261,15 @@ class AppleLoginManager:
             flow.attempts += 1
             if flow.attempts >= 5:
                 raise LoginError("验证码多次未通过，请重新登录后再试。")
-            # A failed modern trusted-device challenge must be requested again.
-            if not flow.client.request_2fa_code():
-                raise LoginError("Apple 暂时无法重新发送验证码，请重新登录或使用 Cookie 导入。")
-            self._check(flow)
+            # Request a fresh modern challenge, but keep existing-device code
+            # entry usable when Apple has no automatic delivery route.
+            self._await_code(flow)
             with flow.lock:
-                flow.state = "awaiting_code"
-                flow.delivery = flow.client.two_factor_delivery_method
-                flow.error = "验证码未通过，请输入设备或短信中新收到的验证码。"
+                flow.error = (
+                    "验证码未通过，请输入当前 Apple 账号设备上显示的最新六位验证码。"
+                    if flow.delivery == "trusted_device_manual"
+                    else "验证码未通过，请输入设备或短信中新收到的验证码。"
+                )
             return
         self._finish(flow)
 

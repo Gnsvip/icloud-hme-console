@@ -68,6 +68,22 @@ describe("Apple login", () => {
     expect((screen.getByLabelText("六位验证码") as HTMLInputElement).value).toBe("");
   });
 
+  it("keeps an editable code field when automatic delivery is unavailable", async () => {
+    const manual = { ...flow, delivery: "trusted_device_manual" };
+    fetcher.mockResolvedValueOnce(json({ ...manual, state: "starting" }));
+    render(<AppleLoginForm close={vi.fn()} done={vi.fn()} />);
+    await signIn();
+    fetcher.mockResolvedValueOnce(json(manual));
+    await poll();
+    expect(screen.getByText(/设备上已经显示的六位验证码/)).toBeTruthy();
+    expect((screen.getByLabelText("六位验证码") as HTMLInputElement).disabled).toBe(false);
+    fetcher.mockResolvedValueOnce(json({ ...manual, error: "验证码未通过" }));
+    await verify();
+    expect(JSON.parse(fetcher.mock.calls.at(-1)?.[1].body)).toEqual({ code: "123456" });
+    expect(screen.getByRole("alert").textContent).toContain("验证码未通过");
+    expect((screen.getByLabelText("六位验证码") as HTMLInputElement).disabled).toBe(false);
+  });
+
   it("stops polling an expired flow and can restart", async () => {
     render(<AppleLoginForm close={vi.fn()} done={vi.fn()} />);
     await signIn();

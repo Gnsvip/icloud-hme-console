@@ -31,7 +31,11 @@ class FakeApple:
         self.two_factor_delivery_method = "trusted_device"
         self.authenticate = Mock()
         self.request_2fa_code = Mock(return_value=True)
+        self.use_existing_trusted_device_code = Mock(side_effect=self.use_existing_code)
         self.validate_2fa_code = Mock(side_effect=self.validate)
+
+    def use_existing_code(self):
+        self.two_factor_delivery_method = "trusted_device"
 
     def validate(self, code):
         if code == "123456":
@@ -213,10 +217,55 @@ def test_capacity_and_code_format_validation(rig):
     rig.apple.validate_2fa_code.assert_not_called()
 
 
-def test_failed_code_delivery_does_not_wait_for_a_code_that_was_never_sent(rig):
+def test_unavailable_automatic_delivery_accepts_an_existing_device_code(rig):
+    rig.apple.two_factor_delivery_method = "unknown"
     rig.apple.request_2fa_code.return_value = False
-    assert start(rig).state == "failed"
+    flow = start(rig)
+    assert flow.state == "awaiting_code"
+    assert rig.manager.status(flow.id)["delivery"] == "trusted_device_manual"
+    rig.apple.use_existing_trusted_device_code.assert_called_once()
     assert rig.accounts.accounts == {}
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "complete"
+
+
+def test_existing_device_code_retry_keeps_input_available_without_resending(rig):
+    rig.apple.request_2fa_code.return_value = False
+    flow = start(rig)
+    for attempt in range(5):
+        rig.manager.verify(flow.id, "000000")
+        idle(rig.manager, flow.id)
+        assert flow.state == ("failed" if attempt == 4 else "awaiting_code")
+    rig.apple.request_2fa_code.assert_called_once()
+    assert rig.accounts.accounts == {}
+
+
+def test_security_key_discovered_during_delivery_cannot_use_device_code(rig):
+    def require_key():
+        rig.apple.two_factor_delivery_method = "security_key"
+        return False
+    rig.apple.request_2fa_code.side_effect = require_key
+    assert start(rig).state == "failed"
+    rig.apple.use_existing_trusted_device_code.assert_not_called()
+
+
+def test_real_library_unknown_delivery_verifies_existing_device_code(rig, tmp_path):
+    client = login.create_client(INPUT["apple_id"], INPUT["password"], str(tmp_path), "icloud.com")
+    client.authenticate = Mock()
+    client._requires_mfa = True
+    client.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "synthetic-cookie", domain=".icloud.com")
+    client.session.post = Mock()
+    client.trust_session = Mock(side_effect=lambda: setattr(client, "_requires_mfa", False))
+    rig.manager.client_factory = lambda *args: client
+    flow = start(rig)
+    assert flow.state == "awaiting_code"
+    assert flow.delivery == "trusted_device_manual"
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "complete"
+    assert client.session.post.call_count == 1
+    assert client.session.post.call_args.args[0].endswith("/verify/trusteddevice/securitycode")
+    assert client.session.post.call_args.kwargs["json"] == {"securityCode": {"code": "123456"}}
+    client.trust_session.assert_called_once()
 
 
 def test_network_calls_are_bounded_and_expired_steps_cannot_continue(rig):
