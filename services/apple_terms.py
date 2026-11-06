@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import re
+from html import unescape
 from html.parser import HTMLParser
 
 
@@ -45,7 +46,7 @@ class TermsText(HTMLParser):
             link = self.links.pop()
             if link.startswith("https://"):
                 self.parts.append(" (" + link + ")")
-        if tag in ("p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "li"):
+        if tag in ("p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr", "li"):
             self.parts.append("\n")
         if tag in ("td", "th"):
             self.parts.append("\t")
@@ -54,12 +55,19 @@ class TermsText(HTMLParser):
         if not self.hidden:
             self.parts.append(data)
 
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag != "br":
+            self.handle_endtag(tag)
 
-def readable_text(value):
+
+def readable_text(value, *, escaped_html=False):
     if not isinstance(value, str):
         return ""
     parser = TermsText()
-    parser.feed(value)
+    # GCBD notices can contain entity-escaped markup. Decode that layer before
+    # parsing, so tags become paragraphs/links rather than visible source text.
+    parser.feed(unescape(value) if escaped_html else value)
     return re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", "".join(parser.parts)).strip()
 
 
@@ -81,8 +89,8 @@ def terms_document(data, privacy_required=False):
         "title": readable_text(decoded["title"]) or "iCloud 条款与条件",
         "summary": readable_text(decoded["summary"]),
         "content": readable_text(decoded["content"]),
-        "privacy_title": readable_text(data.get("gcbdPrivacyNoticeTitle")),
-        "privacy_content": readable_text(data.get("gcbdPrivacyNoticeMessage")),
+        "privacy_title": readable_text(data.get("gcbdPrivacyNoticeTitle"), escaped_html=True),
+        "privacy_content": readable_text(data.get("gcbdPrivacyNoticeMessage"), escaped_html=True),
         "privacy_required": bool(privacy_required or data.get("gcbdPrivacyNoticeMessage")),
     }
     if not document["content"] or document["privacy_required"] and not document["privacy_content"]:

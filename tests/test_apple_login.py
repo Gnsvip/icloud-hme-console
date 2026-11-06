@@ -722,3 +722,23 @@ def test_incomplete_required_privacy_notice_cannot_be_accepted():
     from services.apple_terms import terms_document
     with pytest.raises(ValueError):
         terms_document(apple_terms(privacy=False), privacy_required=True)
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+def test_privacy_notice_renders_escaped_markup_and_apple_closing_breaks(escaped):
+    from html import escape
+    from services.apple_terms import terms_document
+    data = apple_terms()
+    title = '<b>隐私告知</b>'
+    notice = '第一段。</br></br>第二段。<br>第三行。<br/>第四行。<br><a href="https://support.apple.com/HT213840" target="_blank">了解更多</a><script>hidden-script</script>'
+    data["gcbdPrivacyNoticeTitle"] = escape(title) if escaped else title
+    data["gcbdPrivacyNoticeMessage"] = escape(notice) if escaped else notice
+    document = terms_document(data)
+    assert document["privacy_title"] == "隐私告知"
+    assert document["privacy_content"] == "第一段。\n\n第二段。\n第三行。\n第四行。\n了解更多 (https://support.apple.com/HT213840)"
+
+
+def test_privacy_decoding_preserves_literal_angle_text_in_main_terms():
+    from services.apple_terms import terms_document
+    document = terms_document(apple_terms(content="<p>输入 &lt;email&gt;，A &amp; B。</p>"))
+    assert document["content"] == "输入 <email>，A & B。"
