@@ -306,7 +306,9 @@ def api_inventory_trash(email_addr):
 
 def api_inventory_purge(email_addr):
     try:
-        return jsonify({"ok": _inventory.purge(email_addr)})
+        if not _inventory.purge(email_addr):
+            return jsonify({"ok": False, "error": "记录不存在，请刷新列表。"})
+        return jsonify({"ok": True, "message": "垃圾箱记录已永久删除"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 

@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { Mailboxes } from "./pages/Mailboxes";
 
-const row = { email: "gone@example.test", account_id: "account", anonymousId: "stale-id", group: "trash" };
+const row = { email: "gone@example.test", account_id: "account", anonymousId: "stale-id", group: "unused" };
 const json = (data: unknown) => new Response(JSON.stringify(data), {
   headers: { "content-type": "application/json" },
 });
@@ -37,4 +37,27 @@ it("retains the confirmation and selection if permanent deletion fails", async (
   expect(screen.getByRole("button", { name: "确认操作" })).toBeTruthy();
   expect(notify).not.toHaveBeenCalled();
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith("/api/inventory"))).toHaveLength(2);
+});
+
+it("permanently deletes selected trash records locally without cloud identifiers", async () => {
+  let items = [{ email: "trash-a@example.test", group: "trash" }, { email: "trash-b@example.test", group: "trash" }];
+  const fetcher = vi.fn((path: string) => {
+    if (path.endsWith("/purge")) {
+      items = items.filter((item) => !path.includes(encodeURIComponent(item.email)));
+      return Promise.resolve(json({ ok: true }));
+    }
+    return Promise.resolve(json({ ok: true, items, count: items.length, page: 1, pages: 1 }));
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  render(<QueryClientProvider client={client}><Mailboxes mode="emails" accounts={[]} /></QueryClientProvider>);
+  fireEvent.click(await screen.findByRole("checkbox", { name: "选择本页邮箱" }));
+  fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+  expect(await screen.findByRole("heading", { name: "永久删除 2 条垃圾箱记录？" })).toBeTruthy();
+  expect(screen.getByText(/iCloud 云端邮箱不受影响/)).toBeTruthy();
+  expect(fetcher.mock.calls.some(([path]) => path.endsWith("/purge"))).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "确认操作" }));
+  expect(await screen.findByText("这个分组还没有邮箱")).toBeTruthy();
+  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/purge"))).toHaveLength(2);
+  expect(fetcher.mock.calls.some(([path]) => path.startsWith("/api/accounts/"))).toBe(false);
 });

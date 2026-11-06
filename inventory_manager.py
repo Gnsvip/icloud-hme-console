@@ -236,6 +236,8 @@ class InventoryManager:
             raise RuntimeError("库存 items 格式损坏，已停止写入，请恢复备份")
         if any(not isinstance(item, dict) for item in items.values()):
             raise RuntimeError("库存记录格式损坏，已停止写入，请恢复备份")
+        if not isinstance(data.get("purged_emails", {}), dict):
+            raise RuntimeError("永久删除记录格式损坏，已停止写入，请恢复备份")
         data["items"] = items
         data.setdefault("version", 1)
         data.setdefault("updated_at", "")
@@ -317,7 +319,7 @@ class InventoryManager:
                 if not isinstance(row, dict):
                     continue
                 email_addr = _email_key(row.get("email", ""))
-                if not email_addr:
+                if not email_addr or email_addr in data.get("purged_emails", {}):
                     continue
                 item = dict(items.get(email_addr) or self._default_item(email_addr))
                 created = row.get("createdAt") or row.get("created_at") or item.get("created_ts") or item.get("created_at")
@@ -410,6 +412,8 @@ class InventoryManager:
         key = _email_key(email_addr)
         with self.lock:
             data = self.load()
+            if key in data.get("purged_emails", {}):
+                raise ValueError("该记录已永久删除，请刷新列表。")
             item = dict(data["items"].get(key) or self._default_item(key))
             item.update(updates)
             if item.get("group") != "trash" and (item.get("code") or item.get("last_received_at")):
@@ -432,11 +436,17 @@ class InventoryManager:
         key = _email_key(email_addr)
         with self.lock:
             data = self.load()
-            existed = key in data["items"]
-            if existed:
-                del data["items"][key]
-                self.save(data)
-            return existed
+            item = data["items"].get(key)
+            if item is None:
+                return key in data.get("purged_emails", {})
+            if item.get("group") != "trash":
+                raise ValueError("只能永久删除垃圾箱中的记录，请先移入垃圾箱。")
+            # Keep only the address and deletion time so cached/cloud/message
+            # imports cannot recreate a record the user permanently removed.
+            data.setdefault("purged_emails", {})[key] = _now()
+            del data["items"][key]
+            self.save(data)
+            return True
 
     def apply_messages(self, messages: Iterable[Dict[str, Any]], account_id: str = "", method: str = "iCloud IMAP") -> Dict[str, Any]:
         with self.lock:

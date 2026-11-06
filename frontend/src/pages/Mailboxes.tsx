@@ -62,6 +62,7 @@ export function Mailboxes({
   );
   const rows: Row[] = query.data?.items || [];
   const checked = Object.values(selected);
+  const checkedAreTrash = checked.length > 0 && checked.every((row) => row.group === "trash");
   const effectivePage = query.data?.page || page;
   useEffect(() => {
     setPage(1);
@@ -147,6 +148,30 @@ export function Mailboxes({
       },
     });
   }
+  function purgeTrash(items: Row[]) {
+    setActions(null);
+    setConfirm({
+      title: `永久删除 ${items.length} 条垃圾箱记录？`,
+      description: "仅删除工作台中的记录，iCloud 云端邮箱不受影响。删除后无法恢复，也不会被同步自动加回。",
+      run: async () => {
+        if (items.some((row) => row.group !== "trash"))
+          throw new Error("只能永久删除垃圾箱中的记录，请刷新列表。");
+        try {
+          for (const row of items) {
+            await post(`/api/inventory/${enc(row.email)}/purge`);
+            setSelected((old) => {
+              const next = { ...old };
+              delete next[row.email];
+              return next;
+            });
+          }
+          toast.success(`已永久删除 ${items.length} 条垃圾箱记录`);
+        } finally {
+          await refresh();
+        }
+      },
+    });
+  }
   return (
     <>
       <PageHead
@@ -184,7 +209,7 @@ export function Mailboxes({
             <button
               key={key}
               className={group === key ? "selected" : ""}
-              onClick={() => setGroup(key)}
+              onClick={() => { setGroup(key); setSelected({}); }}
             >
               {label}
               {group === key && query.data && <span>{query.data.count}</span>}
@@ -300,10 +325,10 @@ export function Mailboxes({
               variant="ghost"
               size="sm"
               disabled={!!busy}
-              onClick={() => deleteCloud(checked)}
+              onClick={() => checkedAreTrash ? purgeTrash(checked) : deleteCloud(checked)}
             >
               <Trash2 />
-              删除别名
+              {checkedAreTrash ? "永久删除" : "删除别名"}
             </Button>
             <button
               className="selection-clear"
@@ -543,18 +568,7 @@ export function Mailboxes({
             {actions.group === "trash" && (
               <button
                 className="danger-text"
-                onClick={() => {
-                  const row = actions;
-                  setActions(null);
-                  setConfirm({
-                    title: "永久删除本地记录？",
-                    description: row.email + " 的库存记录将被删除。",
-                    run: async () => {
-                      await post(`/api/inventory/${enc(row.email)}/purge`);
-                      await refresh();
-                    },
-                  });
-                }}
+                onClick={() => purgeTrash([actions])}
               >
                 永久删除本地记录
               </button>
