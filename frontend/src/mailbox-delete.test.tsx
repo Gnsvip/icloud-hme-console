@@ -1,18 +1,19 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Mailboxes } from "./pages/Mailboxes";
 
 const row = { email: "gone@example.test", account_id: "account", anonymousId: "stale-id", group: "unused" };
 const json = (data: unknown) => new Response(JSON.stringify(data), {
   headers: { "content-type": "application/json" },
 });
+beforeEach(() => { sessionStorage.clear(); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 async function openDeletion(result: object) {
-  const fetcher = vi.fn((path: string) => Promise.resolve(json(path.endsWith("/delete")
-    ? result : { ok: true, items: [row], count: 1, page: 1, pages: 1 })));
+  const fetcher = vi.fn((path: string) => Promise.resolve(json(path === "/api/alias-deletions/active"
+    ? { ok: true, job: null } : path === "/api/alias-deletions" ? result
+      : { ok: true, items: [row], count: 1, page: 1, pages: 1 })));
   vi.stubGlobal("fetch", fetcher);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   render(<QueryClientProvider client={client}><Mailboxes mode="emails" accounts={[]} /></QueryClientProvider>);
@@ -23,25 +24,25 @@ async function openDeletion(result: object) {
 }
 
 it("explains an already absent alias instead of claiming a new cloud deletion", async () => {
-  const notify = vi.spyOn(toast, "success");
-  const fetcher = await openDeletion({ ok: true, deleted: false, already_absent: true });
-  await waitFor(() => expect(notify).toHaveBeenCalledWith("此账号的云端已无所选别名，本地记录已移入垃圾箱"));
-  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/delete"))).toHaveLength(1);
+  const fetcher = await openDeletion({ ok: true, job_id: "batch-one", state: "complete", total: 1, completed: 1, deleted: 0, absent: 1, failed: 0, items: [{ ...row, state: "absent" }] });
+  expect(await screen.findByRole("heading", { name: "云端删除结果" })).toBeTruthy();
+  expect(screen.getByText("已删除 0 · 云端已不存在 1 · 失败 0")).toBeTruthy();
+  expect(fetcher.mock.calls.filter(([path]) => path === "/api/alias-deletions")).toHaveLength(1);
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith("/api/inventory"))).toHaveLength(2);
 });
 
-it("retains the confirmation and selection if permanent deletion fails", async () => {
-  const notify = vi.spyOn(toast, "success");
-  const fetcher = await openDeletion({ ok: false, error: "别名已停用，但永久删除未完成" });
-  expect(await screen.findByRole("alert")).toHaveProperty("textContent", "别名已停用，但永久删除未完成");
-  expect(screen.getByRole("button", { name: "确认操作" })).toBeTruthy();
-  expect(notify).not.toHaveBeenCalled();
+it("shows failed results without automatically repeating deletion", async () => {
+  const fetcher = await openDeletion({ ok: true, job_id: "batch-one", state: "complete", total: 1, completed: 1, deleted: 0, absent: 0, failed: 1, items: [{ ...row, state: "failed", error: "别名已停用，但永久删除未完成" }] });
+  expect(await screen.findByText(/别名已停用，但永久删除未完成/)).toBeTruthy();
+  expect(screen.getByText(/失败的地址仍保留/)).toBeTruthy();
+  expect(fetcher.mock.calls.filter(([path]) => path === "/api/alias-deletions")).toHaveLength(1);
   expect(fetcher.mock.calls.filter(([path]) => path.startsWith("/api/inventory"))).toHaveLength(2);
 });
 
 it("permanently deletes selected trash records locally without cloud identifiers", async () => {
   let items = [{ email: "trash-a@example.test", group: "trash" }, { email: "trash-b@example.test", group: "trash" }];
   const fetcher = vi.fn((path: string) => {
+    if (path === "/api/alias-deletions/active") return Promise.resolve(json({ ok: true, job: null }));
     if (path.endsWith("/purge")) {
       items = items.filter((item) => !path.includes(encodeURIComponent(item.email)));
       return Promise.resolve(json({ ok: true }));

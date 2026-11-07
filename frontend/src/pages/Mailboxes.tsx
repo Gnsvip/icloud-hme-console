@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { enc, post, stamp, useDebounced, useRemote, type Row } from "@/lib/api";
+import { api, enc, post, stamp, useDebounced, useRemote, type Row } from "@/lib/api";
 import {
   AccountSelect,
   Button,
@@ -31,6 +31,7 @@ import {
 } from "@/components/common";
 import { PageHead } from "@/components/PageHead";
 import { LinkGenerator } from "./Tools";
+import { CloudDelete, rememberedDeleteJob } from "./CloudDelete";
 export function Mailboxes({
   mode,
   accounts,
@@ -52,6 +53,17 @@ export function Mailboxes({
   const [form, setForm] = useState<{ kind: string; rows: Row[] } | null>(null);
   const [links, setLinks] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  const [deletion, setDeletion] = useState<{ items: Row[]; jobId?: string } | null>(() => {
+    const jobId = rememberedDeleteJob();
+    return jobId ? { items: [], jobId } : null;
+  });
+  useEffect(() => {
+    let mounted = true;
+    void api("/api/alias-deletions/active").then((data) => {
+      if (mounted && data.job) setDeletion((old) => old || { items: [], jobId: data.job.job_id });
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
   const [confirm, setConfirm] = useState<{
     title: string;
     description: string;
@@ -117,36 +129,7 @@ export function Mailboxes({
     });
   function deleteCloud(items: Row[]) {
     setActions(null);
-    setConfirm({
-      title: `删除 ${items.length} 个云端别名？`,
-      description:
-        "此操作会从 iCloud 删除选中的别名，并保留本地垃圾箱记录。云端已不存在的地址不会重复删除。请确认这些地址不再需要接收邮件。",
-      run: async () => {
-        let absent = 0;
-        try {
-          for (const row of items) {
-            if (!row.anonymousId || !row.account_id)
-              throw new Error("部分地址缺少云端标识，请先执行云端同步");
-            const result = await post(
-              `/api/accounts/${enc(row.account_id)}/aliases/${enc(row.anonymousId)}/delete`,
-              { email: row.email },
-            );
-            if (result.already_absent) absent++;
-            setSelected((old) => {
-              const next = { ...old };
-              delete next[row.email];
-              return next;
-            });
-          }
-          toast.success(absent === items.length
-            ? "此账号的云端已无所选别名，本地记录已移入垃圾箱"
-            : absent ? `已删除 ${items.length - absent} 个云端别名，${absent} 个已不在云端；本地记录已移入垃圾箱`
-              : "云端别名已删除，本地记录已移入垃圾箱");
-        } finally {
-          await refresh();
-        }
-      },
-    });
+    if (!deletion) setDeletion({ items });
   }
   function purgeTrash(items: Row[]) {
     setActions(null);
@@ -174,6 +157,14 @@ export function Mailboxes({
   }
   return (
     <>
+      {deletion && <CloudDelete {...deletion} close={() => setDeletion(null)} done={(job) => {
+        setSelected((old) => {
+          const next = { ...old };
+          job.items.forEach((row: Row) => { if (row.state !== "failed") delete next[row.email]; });
+          return next;
+        });
+        void refresh();
+      }} />}
       <PageHead
         eyebrow={mode === "codes" ? "CODE DESK" : "MAILBOXES"}
         title={mode === "codes" ? "验证码，随时就绪。" : "你的隐私邮箱。"}

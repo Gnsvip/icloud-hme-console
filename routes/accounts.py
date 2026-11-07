@@ -9,6 +9,41 @@ from app_core import *
 bp = Blueprint("accounts", __name__)
 
 
+def _record_batch_delete(acc_id, result):
+    email = result["email"]
+    _account_mgr._remove_local_email(email)
+    _remove_alias_cache(email=email)
+    if email not in _inventory.load().get("purged_emails", {}):
+        _inventory.update_item(email, group="trash", active=False,
+                               deleted_at=datetime.now().isoformat(timespec="seconds"),
+                               status_type="warn", status_message="云端已无该别名" if result["already_absent"] else "已从 iCloud 删除")
+
+
+from services.alias_delete_service import AliasDeleteJobs, DeleteJobError
+_delete_jobs = AliasDeleteJobs(_account_mgr, _record_batch_delete)
+
+
+@bp.route("/api/alias-deletions", methods=["POST"])
+def api_start_alias_deletion():
+    try:
+        return jsonify(_delete_jobs.start(request.get_json(silent=True))), 202
+    except DeleteJobError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
+
+
+@bp.route("/api/alias-deletions/active")
+def api_active_alias_deletion():
+    return jsonify(_delete_jobs.active())
+
+
+@bp.route("/api/alias-deletions/<job_id>")
+def api_alias_deletion_status(job_id):
+    try:
+        return jsonify(_delete_jobs.status(job_id))
+    except DeleteJobError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
+
+
 def _asset_version():
     static_dir = HERE / "static"
     mtimes = []
