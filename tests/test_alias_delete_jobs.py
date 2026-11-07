@@ -134,6 +134,49 @@ def test_mismatch_and_absent_addresses_do_not_send_deletions(rig):
     assert rig.record.call_count == 1
 
 
+def test_missing_cached_ids_are_resolved_by_email_from_the_current_account(rig):
+    rows = payload(rig.accounts)["items"][:3]
+    rows[0]["anonymousId"] = ""
+    rows[1].pop("anonymousId")
+    rows[2]["anonymousId"] = None
+    result = finished(rig.jobs, rig.jobs.start({"request_id": "missing-cached-ids", "items": rows})["job_id"])
+    assert result["deleted"] == 3 and result["failed"] == 0
+    assert {call[0] for call in rig.accounts.delete_calls} == {"id-0", "id-1", "id-2"}
+    assert rig.accounts.list_calls == 2
+    assert rig.record.call_count == 3
+
+
+def test_missing_cached_id_and_absent_email_never_send_a_cloud_deletion(rig):
+    data = {"request_id": "missing-and-absent", "items": [
+        {"email": "absent@example.test", "account_id": "account", "anonymousId": ""},
+    ]}
+    result = finished(rig.jobs, rig.jobs.start(data)["job_id"])
+    assert result["absent"] == 1 and result["deleted"] == 0
+    assert not rig.accounts.delete_calls
+    rig.record.assert_called_once_with("account", {"email": "absent@example.test", "deleted": False, "already_absent": True})
+
+
+def test_missing_cached_id_with_failed_cloud_lookup_is_not_treated_as_absent(rig):
+    rig.accounts.fail_list = True
+    row = {"email": "box-0@example.test", "account_id": "account", "anonymousId": ""}
+    result = finished(rig.jobs, rig.jobs.start({"request_id": "missing-id-list-fails", "items": [row]})["job_id"])
+    assert result["failed"] == 1 and result["absent"] == result["deleted"] == 0
+    assert not rig.accounts.delete_calls
+    rig.record.assert_not_called()
+
+
+@pytest.mark.parametrize("changes,message", [
+    ({"account_id": "missing-account", "anonymousId": ""}, "所属账号不存在"),
+    ({"anonymousId": 123}, "云端标识格式无效"),
+    ({"email": "invalid"}, "邮箱地址无效"),
+])
+def test_invalid_identity_is_rejected_with_a_specific_reason(rig, changes, message):
+    row = {**payload(rig.accounts)["items"][0], **changes}
+    with pytest.raises(DeleteJobError, match=message):
+        rig.jobs.start({"request_id": "invalid-identity", "items": [row]})
+    assert not rig.accounts.clients
+
+
 def test_rate_limiting_stops_remaining_requests_and_retains_failed_rows(rig):
     rig.accounts.fail = "HTTP 429: rate limit"
     result = finished(rig.jobs, rig.jobs.start(payload(rig.accounts))["job_id"])

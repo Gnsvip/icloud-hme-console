@@ -49,12 +49,22 @@ class AliasDeleteJobs:
             raise DeleteJobError(f"每次请选择 1 至 {self.MAX_ITEMS} 个邮箱。")
         rows, seen = [], set()
         for item in items:
-            if not isinstance(item, dict) or any(not isinstance(item.get(k), str) for k in ("email", "account_id", "anonymousId")):
-                raise DeleteJobError("邮箱缺少账号或云端标识，请先同步。")
+            if not isinstance(item, dict) or any(not isinstance(item.get(k), str) for k in ("email", "account_id")):
+                raise DeleteJobError("邮箱缺少地址或所属账号，请先同步。")
             email = item["email"].strip().lower()
-            acc_id, alias_id = item["account_id"].strip(), item["anonymousId"].strip()
-            if not email or "@" not in email or len(email) > 254 or not alias_id or len(alias_id) > 512 or not self.accounts.get_account(acc_id):
-                raise DeleteJobError("邮箱或所属账号无效，请刷新列表。")
+            acc_id = item["account_id"].strip()
+            if not email or "@" not in email or len(email) > 254:
+                raise DeleteJobError("邮箱地址无效，请刷新列表。")
+            if not self.accounts.get_account(acc_id):
+                raise DeleteJobError(f"{email}：所属账号不存在，请刷新列表或重新关联账号。")
+            # Local/mail-cache records may not have an Apple ID. Resolve these
+            # by exact email in this account's fresh cloud list before writing.
+            alias_id = item.get("anonymousId")
+            if alias_id is None:
+                alias_id = ""
+            if not isinstance(alias_id, str) or len(alias_id) > 512:
+                raise DeleteJobError(f"{email}：云端标识格式无效，请先同步。")
+            alias_id = alias_id.strip()
             if email in seen:
                 raise DeleteJobError("同一邮箱不能重复出现在删除批次中。")
             seen.add(email)
@@ -123,7 +133,7 @@ class AliasDeleteJobs:
             by_email = {a["email"].lower(): a for a in aliases}
             pending = queue.Queue()
             for row in rows:
-                current_id = by_id.get(row["anonymousId"])
+                current_id = by_id.get(row["anonymousId"]) if row["anonymousId"] else None
                 if current_id and current_id["email"].lower() != row["email"]:
                     self._result(row, "failed", "邮箱地址与云端标识不一致，请先同步云端列表。")
                     continue
