@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
   Cloud,
   Download,
   Edit3,
@@ -20,6 +21,8 @@ import {
   Loading,
   Modal,
   Pill,
+  Pager,
+  SearchBox,
   Submit,
 } from "@/components/common";
 import { PageHead } from "@/components/PageHead";
@@ -193,7 +196,22 @@ export function Accounts({
   const [editing, setEditing] = useState<Row | null>(null);
   const [removing, setRemoving] = useState<Row | null>(null);
   const [login, setLogin] = useState<Row | null>(null);
+  const [details, setDetails] = useState<Row | null>(null);
   const [busy, setBusy] = useState("");
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const errorOf = (a: Row) => a.error || a.last_error || a.last_mail_error;
+  const statusOf = (a: Row) => a.status === "active" && (!a.has_cookies || errorOf(a)) ? "warning" : a.status;
+  const healthy = accounts.filter((a) => statusOf(a) === "active").length;
+  const search = query.trim().toLowerCase();
+  const filtered = accounts.filter((a) =>
+    (filter === "all" || (filter === "active" ? statusOf(a) === "active" : statusOf(a) !== "active")) &&
+    [a.name, a.icloud_email, a.real_email].some((value) => String(value || "").toLowerCase().includes(search)),
+  );
+  const pages = Math.max(1, Math.ceil(filtered.length / 10));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * 10, currentPage * 10);
   return (
     <>
       <PageHead
@@ -222,90 +240,69 @@ export function Accounts({
           />
         </div>
       ) : (
-        <div className="account-card-grid">
-          {accounts.map((a, i) => (
-            <section className="panel account-detail-card" key={a.id}>
-              <div className="account-card-top">
-                <span className={"account-avatar color-" + (i % 4)}>
-                  <Cloud size={22} />
-                </span>
-                <Pill value={a.status} />
-              </div>
-              <h2>{a.name || "iCloud 账号"}</h2>
-              <p>{a.icloud_email || a.real_email || "收件邮箱未设置"}</p>
-              <div className="account-card-numbers">
-                <div>
-                  <strong>{a.alias_total || 0}</strong>
-                  <small>全部别名</small>
-                </div>
-                <div>
-                  <strong>{a.alias_active || 0}</strong>
-                  <small>活跃别名</small>
-                </div>
-              </div>
-              <div className="account-check">
-                <ShieldCheck size={15} />
-                {a.has_cookies ? (a.login_method === "apple" ? "Apple 已连接" : "已导入 Cookie") : "需要登录"}
-                <span />
-                <KeyRound size={15} />
-                {a.has_app_password ? "收件已配置" : "收件待配置"}
-              </div>
-              {(a.error || a.last_error || a.last_mail_error) && (
-                <div className="account-warning">
-                  {a.error || a.last_error || a.last_mail_error}
-                </div>
-              )}
-              <div className="account-card-actions">
-                <Button variant="outline" size="sm" onClick={() => setLogin(a)}>重新登录</Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEditing(a)}
-                >
-                  <Edit3 />
-                  设置
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy === a.id}
-                  onClick={async () => {
-                    setBusy(a.id);
-                    try {
-                      await post(`/api/accounts/${enc(a.id)}/validate`);
-                      toast.success("账号校验完成");
-                      refresh();
-                    } catch (err) {
-                      toast.error(err.message);
-                    } finally {
-                      setBusy("");
-                    }
-                  }}
-                >
-                  <CheckCircle2 />
-                  {busy === a.id ? "校验中…" : "校验"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={"移除账号 " + a.name}
-                  onClick={() => setRemoving(a)}
-                >
-                  <Trash2 />
-                </Button>
-              </div>
-            </section>
-          ))}
+        <div className="panel accounts-panel">
+          <div className="accounts-toolbar">
+            <div className="accounts-filters" aria-label="账号状态筛选">
+              {[["all", "全部账号", accounts.length], ["active", "正常", healthy], ["attention", "需处理", accounts.length - healthy]].map(([value, label, count]) => (
+                <button key={value} aria-pressed={filter === value} className={filter === value ? "selected" : ""}
+                  onClick={() => { setFilter(String(value)); setPage(1); }}>
+                  {label}<span>{count}</span>
+                </button>
+              ))}
+            </div>
+            <SearchBox value={query} onChange={(value) => { setQuery(value); setPage(1); }} placeholder="搜索账号名称或邮箱…" />
+          </div>
+          {!filtered.length ? <Empty title="没有匹配的账号" detail="换个关键词，或查看全部账号。" action={<Button variant="outline" onClick={() => { setQuery(""); setFilter("all"); setPage(1); }}>清除筛选</Button>} /> : (
+            <div className="table-wrap accounts-table-wrap">
+              <table className="accounts-table" aria-label="iCloud 账号列表">
+                <thead><tr><th scope="col">账号</th><th scope="col">状态</th><th scope="col">活跃 / 全部别名</th><th scope="col">连接配置</th><th scope="col">操作</th></tr></thead>
+                <tbody>{visible.map((a) => (
+                  <tr key={a.id}>
+                    <td className="accounts-identity-cell">
+                      <div className="accounts-identity">
+                        <span className="accounts-avatar"><Cloud size={18} /></span>
+                        <div><strong title={a.name}>{a.name || "iCloud 账号"}</strong><div className="accounts-address"><span title={a.icloud_email || a.real_email}>{a.icloud_email || a.real_email || "收件邮箱未设置"}</span><small>{a.host === "icloud.com.cn" ? "中国区" : "国际区"}</small></div></div>
+                      </div>
+                    </td>
+                    <td className="accounts-status-cell"><Pill value={statusOf(a)} />{errorOf(a) && <button className="accounts-detail-link" aria-label={"查看连接详情 " + a.name} onClick={() => setDetails(a)}>查看详情</button>}</td>
+                    <td className="accounts-count-cell" data-label="活跃 / 全部别名"><strong>{(a.alias_active || 0).toLocaleString()}</strong><span className="muted"> / {(a.alias_total || 0).toLocaleString()}</span></td>
+                    <td className="accounts-connection-cell"><div><ShieldCheck size={14} />{a.has_cookies ? (a.login_method === "apple" ? "Apple 已连接" : "已导入 Cookie") : "需要登录"}</div><div><KeyRound size={14} />{a.has_app_password ? "收件已配置" : "收件待配置"}</div></td>
+                    <td className="accounts-actions-cell"><div className="accounts-row-actions">
+                      <Button variant="outline" size="sm" onClick={() => setLogin(a)}>重新登录</Button>
+                      <Button variant="ghost" size="icon" aria-label={"设置账号 " + a.name} title="账号设置" onClick={() => setEditing(a)}><Edit3 /></Button>
+                      <Button variant="ghost" size="sm" disabled={!!busy} onClick={async () => {
+                        setBusy(a.id);
+                        try {
+                          await post(`/api/accounts/${enc(a.id)}/validate`);
+                          toast.success("账号校验完成");
+                          refresh();
+                        } catch (err) { toast.error(err.message); }
+                        finally { setBusy(""); }
+                      }}><CheckCircle2 />{busy === a.id ? "校验中…" : "校验"}</Button>
+                      <Button variant="ghost" size="icon" aria-label={"移除账号 " + a.name} title="移除账号" onClick={() => setRemoving(a)}><Trash2 /></Button>
+                    </div></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+          <Pager page={currentPage} pages={pages} total={filtered.length} onPage={setPage} />
         </div>
       )}
-      <section className="panel" style={{ padding: 24, marginTop: 20 }}>
-        <h2>家庭共享与 iCloud+</h2>
+      <details className="panel accounts-help">
+        <summary><span>家庭共享与 iCloud+<small>加入家庭、开通方案</small></span><ChevronDown size={16} /></summary>
+        <div>
         <p className="muted">加入已共享 iCloud+ 的家庭后，可以使用隐藏邮件地址。接受家庭邀请或购买方案需要在 Apple 的官方流程中确认，完成后返回这里校验账号。</p>
         <div className="form-actions">
           <a className="text-link" href="https://support.apple.com/zh-cn/108380" target="_blank" rel="noopener noreferrer">查看加入家庭步骤 ↗</a>
           <a className="text-link" href="https://support.apple.com/zh-cn/108349" target="_blank" rel="noopener noreferrer">查看 iCloud+ 付费开通步骤 ↗</a>
         </div>
-      </section>
+        </div>
+      </details>
+      {details && <Modal title="账号连接详情" description={details.name || "iCloud 账号"} close={() => setDetails(null)}>
+        <p className="muted">最近一次连接返回的信息：</p><pre className="accounts-error-detail">{String(errorOf(details))}</pre>
+        <div className="form-actions"><Button variant="outline" onClick={() => setDetails(null)}>关闭</Button><Button onClick={() => { setLogin(details); setDetails(null); }}>重新登录</Button></div>
+      </Modal>}
       {login && <AppleLoginForm account={login} close={() => setLogin(null)} done={() => { setLogin(null); refresh(); }} />}
       {editing && (
         <AccountForm

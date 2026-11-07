@@ -1223,6 +1223,93 @@ tr[data-selected="true"] {
   color: var(--muted);
   margin-top: 25px;
 }
+.accounts-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  flex-wrap: wrap;
+}
+.accounts-filters {
+  display: flex;
+  gap: 4px;
+}
+.accounts-filters button {
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.accounts-filters button.selected {
+  color: var(--primary);
+  background: var(--tint);
+  font-weight: 600;
+}
+.accounts-filters span {
+  margin-left: 7px;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+.accounts-toolbar .search-field { width: 270px; }
+.accounts-table { min-width: 840px; }
+.accounts-table th { padding: 11px 16px; }
+.accounts-table td { padding: 10px 16px; vertical-align: middle; }
+.accounts-identity-cell { width: 100%; }
+.accounts-identity { display: flex; align-items: center; gap: 10px; }
+.accounts-avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  background: var(--tint);
+  color: var(--primary);
+  border-radius: 8px;
+}
+.accounts-identity > div { min-width: 0; }
+.accounts-identity strong { display: block; font-weight: 600; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+.accounts-address { display: flex; align-items: center; gap: 8px; margin-top: 3px; color: var(--muted); font-size: 0.8125rem; }
+.accounts-address > span { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.accounts-address small { flex-shrink: 0; font-size: inherit; padding-left: 8px; border-left: 1px solid var(--border); }
+.accounts-detail-link { display: block; margin-top: 3px; color: var(--muted); font-size: 0.8125rem; text-decoration: underline; text-underline-offset: 3px; }
+.accounts-count-cell { font-variant-numeric: tabular-nums; }
+.accounts-count-cell strong { font-weight: 600; }
+.accounts-connection-cell { font-size: 0.8125rem; color: var(--muted); }
+.accounts-connection-cell > div { display: flex; align-items: center; gap: 6px; line-height: 1.7; }
+.accounts-table th:last-child { text-align: right; }
+.accounts-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 3px; }
+.accounts-help { margin-top: 16px; }
+.accounts-help summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; padding: 16px 18px; list-style: none; font-weight: 500; }
+.accounts-help summary::-webkit-details-marker { display: none; }
+.accounts-help summary small { color: var(--muted); font-weight: 400; margin-left: 14px; font-size: 0.8125rem; }
+.accounts-help[open] summary > svg { transform: rotate(180deg); }
+.accounts-help > div { padding: 0 18px 18px; }
+.accounts-help .form-actions { margin-top: 12px; flex-wrap: wrap; }
+.accounts-error-detail { max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; border-radius: 8px; background: var(--surface); font-size: 0.875rem; }
+@media (max-width: 767px) {
+  .accounts-toolbar { padding: 12px; gap: 10px; }
+  .accounts-toolbar .search-field { width: 100%; }
+  .accounts-filters { justify-content: space-between; width: 100%; }
+  .accounts-filters button { padding: 8px; }
+  .accounts-table { min-width: 0; white-space: normal; }
+  .accounts-table thead { display: none; }
+  .accounts-table tbody { display: block; }
+  .accounts-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; padding: 16px; border-top: 1px solid var(--border); }
+  .accounts-table td { display: block; padding: 0 !important; border: 0; }
+  .accounts-table .accounts-identity-cell { width: auto; }
+  .accounts-identity { gap: 8px; }
+  .accounts-identity strong { max-width: 100%; overflow-wrap: anywhere; }
+  .accounts-address { flex-wrap: wrap; gap: 2px 8px; }
+  .accounts-address > span { max-width: 100%; overflow-wrap: anywhere; }
+  .accounts-status-cell { text-align: right; }
+  .accounts-detail-link { margin-left: auto; }
+  .accounts-count-cell::before { content: attr(data-label); display: block; color: var(--muted); font-size: 0.8125rem; margin-bottom: 4px; }
+  .accounts-table .accounts-actions-cell { grid-column: 1 / -1; padding-top: 8px !important; border-top: 1px solid var(--border); }
+  .accounts-row-actions { justify-content: flex-start; gap: 8px; }
+  .accounts-row-actions > button:last-child { margin-left: auto; }
+  .accounts-help summary small { display: block; margin: 3px 0 0; }
+}
 .binding-info strong {
   font-weight: 500;
   color: var(--foreground);
