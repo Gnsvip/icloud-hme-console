@@ -199,7 +199,21 @@ class MailCache:
     def get_inbox(self, acc_id: str) -> List[Dict]:
         with self._lock:
             self._ensure_account(acc_id)
-            return self._sort_messages(list(self._data[acc_id].get("inbox_emails", [])))
+            return self._sort_messages([self._display_message(msg) for msg in self._data[acc_id].get("inbox_emails", [])])
+
+    @staticmethod
+    def _legacy_truncated(message: Dict) -> bool:
+        # Older readers cut at 5,000 characters, often inside a tracking URL.
+        # Keep the cached record on disk but refetch its body when opened.
+        return "body_truncated" not in message and len(str(message.get("body") or "")) == 5000
+
+    @classmethod
+    def _display_message(cls, message: Dict) -> Dict:
+        row = dict(message)
+        if cls._legacy_truncated(row):
+            row.pop("body", None)
+            row["has_body"] = False
+        return row
 
     def set_inbox(self, acc_id: str, emails: List[Dict]):
         with self._lock:
@@ -219,7 +233,7 @@ class MailCache:
         with self._lock:
             self._ensure_account(acc_id)
             return self._sort_messages(
-                list(self._data[acc_id].get("alias_emails", {}).get(alias_email, []))
+                [self._display_message(msg) for msg in self._data[acc_id].get("alias_emails", {}).get(alias_email, [])]
             )
 
     def set_alias_mail(self, acc_id: str, alias_email: str, emails: List[Dict]):
@@ -260,7 +274,7 @@ class MailCache:
         with self._lock:
             self._ensure_account(acc_id)
             msg = self._data[acc_id].get("message_bodies", {}).get(str(msg_id))
-            return dict(msg) if isinstance(msg, dict) else None
+            return dict(msg) if isinstance(msg, dict) and not self._legacy_truncated(msg) else None
 
     def set_message(self, acc_id: str, msg_id: str, message: Dict):
         if not message:
@@ -286,7 +300,7 @@ class MailCache:
         with self._lock:
             self._ensure_account(acc_id)
             return {
-                alias: self._sort_messages(list(emails))
+                alias: self._sort_messages([self._display_message(msg) for msg in emails])
                 for alias, emails in self._data[acc_id].get("alias_emails", {}).items()
             }
 

@@ -18,16 +18,9 @@ import {
 } from "@/components/common";
 import { PageHead } from "@/components/PageHead";
 import { AccountForm } from "./Accounts";
+import { MailBody, plainMailBody, readableMailText } from "@/lib/mail-body";
 function messageKey(m: Row) {
   return m.account_id + ":" + m.id;
-}
-function plainBody(value: string) {
-  const doc = new DOMParser().parseFromString(value || "", "text/html");
-  doc
-    .querySelectorAll("script,style,img,iframe,object")
-    .forEach((e) => e.remove());
-  doc.querySelectorAll("br,p,div,tr,li").forEach((e) => e.append("\n"));
-  return doc.body.textContent || "";
 }
 export function InboxPage({ accounts }: { accounts: Row[] }) {
   const client = useQueryClient();
@@ -40,6 +33,7 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState(null);
   const [selected, setSelected] = useState<Row | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
   const [settings, setSettings] = useState<Row | null>(null);
   const path = search
     ? `/api/inbox/search?alias=${enc(search)}&limit=${limit}`
@@ -59,6 +53,9 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
     selected?.body ||
     (!bodyQuery.isPlaceholderData ? bodyQuery.data?.message?.body : "") ||
     "";
+  const shownBody = body || selected?.body_preview || selected?.preview || "暂无正文";
+  const bodyTruncated = selected?.body ? selected.body_truncated : !bodyQuery.isPlaceholderData && bodyQuery.data?.message?.body_truncated;
+  useEffect(() => { setShowRaw(false); }, [selected?.account_id, selected?.id]);
   useEffect(() => {
     setSelected(null);
   }, [account, search]);
@@ -225,7 +222,7 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
                   </div>
                   <h3>{m.subject || "（无主题）"}</h3>
                   <p>
-                    {plainBody(
+                    {readableMailText(
                       m.body_preview ||
                         m.preview ||
                         m.body ||
@@ -261,7 +258,8 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
                   </Button>
                   <span>邮件详情</span>
                   <div />
-                  <CopyButton value={plainBody(body)} label="复制正文" />
+                  <Button variant="ghost" size="sm" aria-pressed={showRaw} onClick={() => setShowRaw(!showRaw)}>{showRaw ? "易读模式" : "显示原文"}</Button>
+                  <CopyButton value={showRaw ? plainMailBody(body) : readableMailText(body)} label="复制正文" />
                 </div>
                 <div className="reader-header">
                   <h2>{selected.subject || "（无主题）"}</h2>
@@ -303,12 +301,8 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
                   <Loading />
                 ) : (
                   <div className="reader-body">
-                    {plainBody(
-                      body ||
-                        selected.body_preview ||
-                        selected.preview ||
-                        "暂无正文",
-                    )}
+                    {showRaw ? plainMailBody(shownBody) : <MailBody value={shownBody} />}
+                    {bodyTruncated && <p className="muted">邮件较长，当前显示前部分正文。</p>}
                   </div>
                 )}
               </>

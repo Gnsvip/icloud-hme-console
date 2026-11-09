@@ -685,6 +685,8 @@ def _attach_cached_bodies(acc_id, messages):
         if cached:
             row["body"] = cached.get("body", row.get("body", ""))
             row["content_type"] = cached.get("content_type", row.get("content_type", ""))
+            if "body_truncated" in cached:
+                row["body_truncated"] = cached["body_truncated"]
             row["has_body"] = True
         else:
             row["has_body"] = bool(row.get("body"))

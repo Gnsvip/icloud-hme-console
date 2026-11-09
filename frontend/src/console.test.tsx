@@ -165,6 +165,23 @@ describe("request lifecycle", () => {
   });
 });
 describe("mail and inventory interactions", () => {
+  it("offers readable and original bodies and resets the view for another email", async () => {
+    const url = "https://tracking.example.test/click?token=" + "long-token-".repeat(100);
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(json({ ok: true, emails: [
+      { id: "1", account_id: "a", subject: "Long link message", body: `正文 (${url})\n最后一段` },
+      { id: "2", account_id: "a", subject: "Other message", body: "另一封邮件" },
+    ] }))));
+    const { Wrapper } = wrapper();
+    render(<Wrapper><InboxPage accounts={accounts} /></Wrapper>);
+    fireEvent.click(await screen.findByRole("button", { name: /Long link message/ }));
+    expect(screen.getByRole("link", { name: "链接：tracking.example.test" }).getAttribute("href")).toBe(url);
+    fireEvent.click(screen.getByRole("button", { name: "显示原文" }));
+    expect(screen.getByRole("button", { name: "易读模式" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(new RegExp("long-token-"))).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Other message/ }));
+    expect(screen.getByRole("button", { name: "显示原文" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("uses account plus UID and never shows the previous account body", async () => {
     let resolveBody: (v: Response) => void;
     const fetcher = vi.fn((path: string) => {

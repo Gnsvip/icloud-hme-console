@@ -31,6 +31,7 @@ from typing import Optional, Dict, Iterable, List
 IMAP_SERVER = "imap.mail.me.com"
 IMAP_PORT = 993
 IMAP_TIMEOUT = 20
+MAX_BODY_CHARS = 50000
 
 IMAP_REGION_CONFIG = {
     "icloud.com": {"server": "imap.mail.me.com", "port": 993, "label": "全球区 iCloud"},
@@ -466,7 +467,8 @@ class ICloudMail:
         if not body and html_body:
             body = _strip_html(html_body)
 
-        return {"body": body[:5000], "content_type": em.get_content_type()}
+        return {"body": body[:MAX_BODY_CHARS], "content_type": em.get_content_type(),
+                "body_truncated": len(body) > MAX_BODY_CHARS}
 
     @staticmethod
     def _extract_body(data: list) -> Optional[bytes]:

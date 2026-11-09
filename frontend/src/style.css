@@ -1718,6 +1718,14 @@ tr[data-selected="true"] {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.mail-body-link {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.dark .mail-body-link {
+  color: #8fd3b7;
+}
 .code-callout {
   display: flex;
   align-items: center;
