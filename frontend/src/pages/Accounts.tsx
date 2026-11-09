@@ -9,6 +9,7 @@ import {
   Plus,
   ShieldCheck,
   Trash2,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { enc, post, type Row } from "@/lib/api";
@@ -27,6 +28,7 @@ import {
 } from "@/components/common";
 import { PageHead } from "@/components/PageHead";
 import { AppleLoginForm } from "./AppleLogin";
+import { AccountBenefits } from "./AccountBenefits";
 export function AccountForm({
   account, close, done,
 }: { account?: Row; close: () => void; done: () => void }) {
@@ -197,6 +199,7 @@ export function Accounts({
   const [removing, setRemoving] = useState<Row | null>(null);
   const [login, setLogin] = useState<Row | null>(null);
   const [details, setDetails] = useState<Row | null>(null);
+  const [benefits, setBenefits] = useState<Row | null>(null);
   const [busy, setBusy] = useState("");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
@@ -269,6 +272,7 @@ export function Accounts({
                     <td className="accounts-connection-cell"><div><ShieldCheck size={14} />{a.has_cookies ? (a.login_method === "apple" ? "Apple 已连接" : "已导入 Cookie") : "需要登录"}</div><div><KeyRound size={14} />{a.has_app_password ? "收件已配置" : "收件待配置"}</div></td>
                     <td className="accounts-actions-cell"><div className="accounts-row-actions">
                       <Button variant="outline" size="sm" onClick={() => setLogin(a)}>重新登录</Button>
+                      <Button variant="ghost" size="icon" aria-label={"家庭与方案 " + a.name} title="家庭与方案" onClick={() => setBenefits(a)}><Users /></Button>
                       <Button variant="ghost" size="icon" aria-label={"设置账号 " + a.name} title="账号设置" onClick={() => setEditing(a)}><Edit3 /></Button>
                       <Button variant="ghost" size="sm" disabled={!!busy} onClick={async () => {
                         setBusy(a.id);
@@ -292,13 +296,14 @@ export function Accounts({
       <details className="panel accounts-help">
         <summary><span>家庭共享与 iCloud+<small>加入家庭、开通方案</small></span><ChevronDown size={16} /></summary>
         <div>
-        <p className="muted">加入已共享 iCloud+ 的家庭后，可以使用隐藏邮件地址。接受家庭邀请或购买方案需要在 Apple 的官方流程中确认，完成后返回这里校验账号。</p>
+        <p className="muted">点击账号右侧的“家庭与方案”图标，可查看家庭成员、iCloud+ 来源和空间用量，并打开 Apple 邀请或方案页面。加入和付款需在 Apple 确认，完成后返回刷新状态。</p>
         <div className="form-actions">
           <a className="text-link" href="https://support.apple.com/zh-cn/108380" target="_blank" rel="noopener noreferrer">查看加入家庭步骤 ↗</a>
           <a className="text-link" href="https://support.apple.com/zh-cn/108349" target="_blank" rel="noopener noreferrer">查看 iCloud+ 付费开通步骤 ↗</a>
         </div>
         </div>
       </details>
+      {benefits && <AccountBenefits key={benefits.id} account={benefits} close={() => setBenefits(null)} />}
       {details && <Modal title="账号连接详情" description={details.name || "iCloud 账号"} close={() => setDetails(null)}>
         <p className="muted">最近一次连接返回的信息：</p><pre className="accounts-error-detail">{String(errorOf(details))}</pre>
         <div className="form-actions"><Button variant="outline" onClick={() => setDetails(null)}>关闭</Button><Button onClick={() => { setLogin(details); setDetails(null); }}>重新登录</Button></div>

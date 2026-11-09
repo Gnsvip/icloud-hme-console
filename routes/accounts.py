@@ -9,6 +9,15 @@ from app_core import *
 bp = Blueprint("accounts", __name__)
 
 
+@bp.route("/api/accounts/<acc_id>/benefits")
+def api_account_benefits(acc_id):
+    from services.account_benefits_service import BenefitsError, read_benefits
+    try:
+        return jsonify(read_benefits(_account_mgr, acc_id))
+    except BenefitsError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
+
+
 def _record_batch_delete(acc_id, result):
     email = result["email"]
     _account_mgr._remove_local_email(email)
