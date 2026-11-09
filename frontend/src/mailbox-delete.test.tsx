@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Mailboxes } from "./pages/Mailboxes";
@@ -9,6 +9,17 @@ const json = (data: unknown) => new Response(JSON.stringify(data), {
 });
 beforeEach(() => { sessionStorage.clear(); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it("shows Trash instead of the historical disabled badge for deleted records", async () => {
+  vi.stubGlobal("fetch", vi.fn((path: string) => Promise.resolve(json(path === "/api/alias-deletions/active"
+    ? { ok: true, job: null }
+    : { ok: true, items: [{ ...row, group: "trash", lifecycle_status: "disabled" }], count: 1, page: 1, pages: 1 }))));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  render(<QueryClientProvider client={client}><Mailboxes mode="emails" accounts={[]} /></QueryClientProvider>);
+  const entry = await screen.findByRole("row", { name: /gone@example.test/ });
+  expect(within(entry).getByText("垃圾箱")).toBeTruthy();
+  expect(within(entry).queryByText("已停用")).toBeNull();
+});
 
 async function openDeletion(result: object) {
   const fetcher = vi.fn((path: string) => Promise.resolve(json(path === "/api/alias-deletions/active"

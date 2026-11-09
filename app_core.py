@@ -506,7 +506,7 @@ def _inventory_summary_from_items(items):
         group = item.get("group") or "unused"
         if group in summary:
             summary[group] += 1
-        if item.get("lifecycle_status") == "disabled":
+        if group != "trash" and item.get("lifecycle_status") == "disabled":
             summary["disabled"] += 1
         if item.get("unread"):
             summary["unread"] += 1

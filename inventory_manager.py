@@ -355,7 +355,7 @@ class InventoryManager:
             counts["all"] += 1
             if group in counts:
                 counts[group] += 1
-            if item.get("lifecycle_status") == "disabled":
+            if group != "trash" and item.get("lifecycle_status") == "disabled":
                 counts["disabled"] += 1
             if item.get("unread"):
                 counts["unread"] += 1
@@ -384,7 +384,7 @@ class InventoryManager:
         rows = []
         for item in data.get("items", {}).values():
             if group == "disabled":
-                if item.get("lifecycle_status") != "disabled":
+                if item.get("group") == "trash" or item.get("lifecycle_status") != "disabled":
                     continue
             elif group and group != "all" and item.get("group", "unused") != group:
                 continue

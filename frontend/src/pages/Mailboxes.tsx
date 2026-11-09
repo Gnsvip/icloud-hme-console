@@ -429,7 +429,9 @@ export function Mailboxes({
                     <td>
                       <Pill
                         value={
-                          row.lifecycle_status === "disabled"
+                          row.group === "trash"
+                            ? "trash"
+                            : row.lifecycle_status === "disabled"
                             ? "disabled"
                             : row.group
                         }
