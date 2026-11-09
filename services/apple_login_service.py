@@ -32,6 +32,12 @@ def region_mismatch(host, target):
     return LoginError(f"你选择的是{regions[host]} iCloud，但 Apple 要求使用{regions[target]}。本次登录已停止，未自动切换区域。")
 
 
+class RegionRedirect(Exception):
+    """A validated Apple accountLogin response requesting the other region."""
+    def __init__(self, host):
+        self.host = host
+
+
 @dataclass
 class LoginFlow:
     id: str
@@ -56,6 +62,8 @@ class LoginFlow:
     resume_step: str = ""
     terms: dict | None = None
     terms_pending: bool = False
+    auto_region: bool = False
+    region_switched: bool = False
     lock: object = field(default_factory=threading.RLock)
 
 
@@ -63,7 +71,7 @@ def create_client(apple_id, password, directory, host):
     from pyicloud import PyiCloudService
     from pyicloud.exceptions import PyiCloud2FARequiredException
 
-    class RegionLockedClient(PyiCloudService):
+    class RegionAwareClient(PyiCloudService):
         def trust_session(self):
             if not super().trust_session():
                 raise LoginError("验证码已通过，但 Apple 尚未建立受信任的 iCloud 会话，请在 iCloud 官方网页确认账号状态后重试。")
@@ -71,6 +79,11 @@ def create_client(apple_id, password, directory, host):
 
         def _authenticate_with_token(self, require_trust=True):
             try:
+                return super()._authenticate_with_token(require_trust=require_trust)
+            except RegionRedirect as redirect:
+                self._is_china_mainland = redirect.host == "icloud.com.cn"
+                self._setup_endpoints()
+                self.session.headers.update({"Origin": self._home_endpoint, "Referer": self._home_endpoint + "/"})
                 return super()._authenticate_with_token(require_trust=require_trust)
             except PyiCloud2FARequiredException as error:
                 response = error.response
@@ -81,7 +94,7 @@ def create_client(apple_id, password, directory, host):
                 raise region_mismatch(host, target) from None
 
     # No keyring access, family-device discovery, or automatic terms acceptance.
-    client = RegionLockedClient(
+    client = RegionAwareClient(
         apple_id, password, cookie_directory=directory,
         china_mainland=host == "icloud.com.cn", authenticate=False,
         with_family=False, accept_terms=False, verify=True,
@@ -169,10 +182,10 @@ class AppleLoginManager:
     def start(self, data):
         apple_id = str(data.get("apple_id") or "").strip()
         password = data.get("password")
-        host = data.get("host", "icloud.com")
+        host = data.get("host", "auto")
         if not apple_id or len(apple_id) > 254 or not isinstance(password, str) or not password or len(password) > 1024:
             raise LoginError("请填写 Apple 账号和登录密码。")
-        if host not in ("icloud.com", "icloud.com.cn"):
+        if host not in ("auto", "icloud.com", "icloud.com.cn"):
             raise LoginError("请选择正确的账号区域。")
         account_id = str(data.get("account_id") or "")
         if account_id and not self.accounts.get_account(account_id):
@@ -186,7 +199,9 @@ class AppleLoginManager:
                         break
             if len(self.flows) >= self.MAX_FLOWS:
                 raise LoginError("等待登录的账号较多，请完成或取消已有登录后再试。", 429)
-            flow = LoginFlow(secrets.token_urlsafe(32), str(data.get("name") or "iCloud 登录账号").strip()[:100], apple_id, host, time.monotonic() + self.TTL)
+            flow = LoginFlow(secrets.token_urlsafe(32), str(data.get("name") or "iCloud 登录账号").strip()[:100], apple_id,
+                             "icloud.com" if host == "auto" else host, time.monotonic() + self.TTL,
+                             auto_region=host == "auto")
             flow.account_id = account_id
             self.flows[flow.id] = flow
             self.pool.submit(self._run, flow, lambda: self._start(flow, password))
@@ -205,6 +220,7 @@ class AppleLoginManager:
         with flow.lock:
             return {"ok": True, "flow_id": flow.id, "state": flow.state,
                     "error": flow.error, "delivery": flow.delivery,
+                    "host": flow.host, "auto_region": flow.auto_region, "region_switched": flow.region_switched,
                     "expires_in": max(0, int(flow.expires - time.monotonic())),
                     "account": flow.account,
                     "terms": flow.terms if flow.state == "awaiting_terms" else None}
@@ -317,8 +333,8 @@ class AppleLoginManager:
         def bounded_send(request, **kwargs):
             self._check(flow)
             parts = urlsplit(str(getattr(request, "url", "")))
-            # Also stop HTTP Location redirects before another region is sent
-            # any request. The selected region stays fixed for this flow.
+            # Only a validated accountLogin response may change flow.host.
+            # Generic HTTP redirects cannot authorize a region change.
             hostname = parts.hostname or ""
             for region in ("icloud.com", "icloud.com.cn"):
                 if (hostname == region or hostname.endswith("." + region)) and region != flow.host:
@@ -336,6 +352,9 @@ class AppleLoginManager:
             flow.http_status = 0
             remaining = min(flow.expires, flow.deadline) - time.monotonic()
             kwargs["timeout"] = (min(10, remaining), min(20, remaining))
+            account_login = hostname in ("setup.icloud.com", "setup.icloud.com.cn") and parts.path == "/setup/ws/1/accountLogin"
+            if account_login:
+                kwargs["allow_redirects"] = False
             response = send(request, **kwargs)
             flow.http_status = getattr(response, "status_code", 0)
             if flow.phase in ("verify_code", "trust_session", "open_session"):
@@ -344,6 +363,23 @@ class AppleLoginManager:
                     flow.phase, flow.host, flow.http_status,
                 )
             self._check(flow)
+            if account_login and flow.http_status == 302:
+                try:
+                    target = response.json().get("domainToUse")
+                    target = target.strip().lower() if isinstance(target, str) else ""
+                except (ValueError, AttributeError):
+                    target = ""
+                if target not in ("icloud.com", "icloud.com.cn"):
+                    raise LoginError("Apple 返回了无法识别的账号区域，请稍后重新登录。")
+                if target == flow.host or flow.region_switched:
+                    raise LoginError("Apple 返回了重复的区域跳转，请稍后重试或手动选择账号区域。")
+                if not flow.auto_region:
+                    raise region_mismatch(flow.host, target)
+                with flow.lock:
+                    self._check(flow)
+                    flow.host = target
+                    flow.region_switched = True
+                raise RegionRedirect(target)
             return response
 
         flow.client.session.send = bounded_send
@@ -500,7 +536,7 @@ class AppleLoginManager:
                 verified_identity=info,
                 hme_available=bool(data.get("webservices", {}).get("premiummailsettings", {}).get("url")),
             )
-            flow.account = {key: account.get(key) for key in ("id", "name", "status", "hme_available", "last_error")}
+            flow.account = {key: account.get(key) for key in ("id", "name", "host", "status", "hme_available", "last_error")}
             flow.state = "complete"
 
     def shutdown(self):

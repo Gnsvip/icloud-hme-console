@@ -280,6 +280,7 @@ def scripted_apple(rig, tmp_path, responses, host="icloud.com"):
     calls = []
 
     def send(request, **kwargs):
+        request.allow_redirects = kwargs.get("allow_redirects")
         calls.append(request)
         expected, status, body = responses.pop(0)
         assert request.url == expected
@@ -334,7 +335,7 @@ def test_real_library_completes_in_selected_region(rig, tmp_path, host, setup):
         (setup, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
     ]
     _, calls = scripted_apple(rig, tmp_path, responses, host)
-    # Omitting the region must default to international.
+    # Automatic detection starts internationally unless Apple requests a change.
     flow = start(rig, **({"host": host} if host == "icloud.com.cn" else {}))
     rig.manager.verify(flow.id, "123456")
     assert idle(rig.manager, flow.id).state == "complete"
@@ -343,6 +344,98 @@ def test_real_library_completes_in_selected_region(rig, tmp_path, host, setup):
     assert rig.verifier_factory.call_args.kwargs["host"] == host
     assert rig.accounts.get_account(flow.account["id"])["host"] == host
     assert not responses
+
+
+@pytest.mark.parametrize("selection", [{}, {"host": "auto"}])
+def test_auto_region_follows_apple_after_code_and_preserves_existing_account(rig, tmp_path, selection):
+    account = rig.accounts.add_account("原名称", '{"SESSION_TOKEN":"old"}', verified_identity=IDENTITY, hme_available=True)
+    rig.accounts.update_account(account["id"], app_password="keep-password", notes="keep-notes", alias_total=99)
+    responses = [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, 302, {"domainToUse": "iCloud.com.cn"}),
+        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+    ]
+    client, calls = scripted_apple(rig, tmp_path, responses)
+    client.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "china-cookie", domain=".icloud.com.cn")
+    flow = start(rig, account_id=account["id"], **selection)
+    assert flow.auto_region and flow.host == "icloud.com"
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "complete"
+    assert flow.host == "icloud.com.cn" and flow.region_switched and client.is_china_mainland
+    assert sum("/securitycode" in call.url for call in calls) == 1
+    assert calls[-1].headers["Origin"] == "https://www.icloud.com.cn"
+    assert calls[-1].headers["Referer"] == "https://www.icloud.com.cn/"
+    assert all(call.allow_redirects is False for call in calls if call.url in (SETUP, SETUP_CN))
+    assert rig.verifier_factory.call_args.kwargs["host"] == "icloud.com.cn"
+    assert rig.verifier_factory.call_args.args[0] == {"X-APPLE-WEBAUTH-TOKEN": "china-cookie"}
+    saved = rig.accounts.get_account(account["id"])
+    assert saved["host"] == "icloud.com.cn" and saved["name"] == "原名称"
+    assert saved["app_password"] == "keep-password" and saved["notes"] == "keep-notes" and saved["alias_total"] == 99
+    assert len(rig.accounts.accounts) == 1 and not responses
+    assert rig.manager.status(flow.id)["account"]["host"] == "icloud.com.cn"
+
+
+def test_auto_region_can_switch_before_code_when_token_does_not_require_trust(rig, tmp_path):
+    responses = [
+        (SETUP, 302, {"domainToUse": "icloud.com.cn"}),
+        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": False, "hsaChallengeRequired": True}),
+    ]
+    client, calls = scripted_apple(rig, tmp_path, responses)
+    client.authenticate.side_effect = lambda: client._authenticate_with_token(require_trust=False)
+    client.request_2fa_code = Mock(return_value=True)
+    flow = start(rig)
+    assert flow.state == "awaiting_code" and flow.host == "icloud.com.cn"
+    assert len(calls) == 2 and not responses and not rig.accounts.accounts
+
+
+def test_auto_region_resume_keeps_detected_host_without_repeating_code(rig, tmp_path):
+    responses = [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, 302, {"domainToUse": "icloud.com.cn"}),
+        (SETUP_CN, requests.ReadTimeout(), {}),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+    ]
+    client, calls = scripted_apple(rig, tmp_path, responses)
+    client.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "china-cookie", domain=".icloud.com.cn")
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "awaiting_connection"
+    assert flow.host == "icloud.com.cn" and flow.region_switched
+    rig.manager.resume(flow.id)
+    assert idle(rig.manager, flow.id).state == "complete"
+    assert sum("/securitycode" in call.url for call in calls) == 1 and not responses
+
+
+def test_auto_region_rejects_a_second_region_redirect(rig, tmp_path):
+    client, calls = scripted_apple(rig, tmp_path, [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, 302, {"domainToUse": "icloud.com.cn"}),
+        (SETUP_CN, 302, {"domainToUse": "icloud.com"}),
+    ])
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "failed"
+    assert "重复的区域跳转" in flow.error
+    assert len(calls) == 4 and flow.host == "icloud.com.cn" and not rig.accounts.accounts
+
+
+@pytest.mark.parametrize("failure", [requests.exceptions.SSLError(), requests.Timeout(), 421, 403])
+def test_auto_region_does_not_switch_on_network_or_authentication_error(rig, tmp_path, failure):
+    client, calls = scripted_apple(rig, tmp_path, [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, failure, {"domainToUse": "icloud.com.cn"}),
+    ])
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    idle(rig.manager, flow.id)
+    assert flow.state in ("failed", "awaiting_connection")
+    assert flow.host == "icloud.com" and not flow.region_switched
+    assert len(calls) == 3 and not rig.accounts.accounts
 
 
 @pytest.mark.parametrize("host,target", [("icloud.com", "icloud.com.cn"), ("icloud.com.cn", "icloud.com")])
@@ -420,7 +513,7 @@ def test_cancelled_pending_connection_cannot_resume(rig):
     assert error.value.status == 410 and flow.client is None
 
 
-@pytest.mark.parametrize("target", ["https://example.test", "evilicloud.com.cn", "icloud.com"])
+@pytest.mark.parametrize("target", ["https://example.test", "evilicloud.com.cn", "icloud.com", None, {}, []])
 def test_region_redirect_never_follows_arbitrary_hosts_or_loops(rig, tmp_path, target):
     _, calls = scripted_apple(rig, tmp_path, [
         (AUTH + "/verify/trusteddevice/securitycode", 204, None),
@@ -627,6 +720,34 @@ def terms_login(rig, tmp_path, document=None, failure=None):
 
 def consent(flow):
     return {"accepted": True, "privacy_accepted": True, "document_id": flow.terms["document_id"]}
+
+
+def test_auto_region_terms_and_final_validation_follow_detected_host(rig, tmp_path):
+    setup = "https://setup.icloud.com.cn/setup/ws/1/"
+    responses = [
+        (AUTH + "/verify/trusteddevice/securitycode", 204, None),
+        (AUTH + "/2sv/trust", 204, None),
+        (SETUP, 302, {"domainToUse": "icloud.com.cn"}),
+        (SETUP_CN, 200, {"termsUpdateNeeded": True, "showGcbdPrivacyNotice": True, "dsInfo": IDENTITY}),
+        (setup + "getTerms", 200, apple_terms()),
+    ]
+    client, calls = scripted_apple(rig, tmp_path, responses)
+    client.params = {}
+    client.session.cookies.set("X-APPLE-WEBAUTH-TOKEN", "china-cookie", domain=".icloud.com.cn")
+    flow = start(rig)
+    rig.manager.verify(flow.id, "123456")
+    assert idle(rig.manager, flow.id).state == "awaiting_terms"
+    assert flow.host == "icloud.com.cn" and flow.terms["privacy_required"]
+    assert not any("repairDone" in call.url for call in calls)
+    responses.extend([
+        (setup + "getTerms", 200, apple_terms()),
+        (setup + "repairDone", 200, {"success": True}),
+        (SETUP_CN, 200, {"dsInfo": {**IDENTITY, "hsaVersion": 2}, "hsaTrustedBrowser": True, "webservices": {}}),
+    ])
+    rig.manager.accept_terms(flow.id, consent(flow))
+    assert idle(rig.manager, flow.id).state == "complete"
+    assert rig.verifier_factory.call_args.kwargs["host"] == "icloud.com.cn"
+    assert sum("/securitycode" in call.url for call in calls) == 1 and not responses
 
 
 def test_terms_are_read_in_workbench_and_only_accepted_after_explicit_consent(rig, tmp_path):

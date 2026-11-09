@@ -148,8 +148,8 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
         }}>
           <div className="form-grid">
             <Field label="账号名称"><input name="name" defaultValue={account?.name || ""} placeholder="可选，例如：个人账号" disabled={busy} /></Field>
-            <Field label="账号区域" hint="按所选区域连接，不自动切换。"><select name="host" defaultValue="icloud.com" disabled={busy}>
-              <option value="icloud.com">国际区 iCloud</option><option value="icloud.com.cn">中国区 iCloud</option>
+            <Field label="账号区域" hint="自动识别会跟随 Apple 返回的账号地区；手动选择后固定使用该地区。"><select name="host" defaultValue="auto" disabled={busy}>
+              <option value="auto">自动识别（推荐）</option><option value="icloud.com">国际区 iCloud</option><option value="icloud.com.cn">中国区 iCloud</option>
             </select></Field>
           </div>
           <Field label="Apple 账号"><input name="apple_id" autoComplete="username" defaultValue={startingAppleId || account?.real_email || ""} required disabled={busy} placeholder="邮箱地址或手机号" /></Field>
@@ -164,6 +164,7 @@ export function AppleLoginForm({ close, done, useCookie, account }: {
         </form>
       ) : (
         <div className="form-stack">
+          {flow.auto_region && flow.region_switched && <p role="status">已根据 Apple 返回结果切换到{flow.host === "icloud.com.cn" ? "中国区" : "国际区"} iCloud。</p>}
           {progress[flow.state] && <p role="status">{progress[flow.state]}</p>}
           {flow.state === "awaiting_code" && (
             <form className="form-stack" onSubmit={async (e) => {

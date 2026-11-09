@@ -103,11 +103,27 @@ describe("Apple login", () => {
     expect(done).toHaveBeenCalledTimes(1);
   });
 
-  it.each([undefined, { id: "selected", host: "icloud.com.cn" }])("defaults to international even when reconnecting %j", async (account) => {
+  it.each([undefined, { id: "selected", host: "icloud.com.cn" }])("defaults to automatic region even when reconnecting %j", async (account) => {
     render(<AppleLoginForm close={vi.fn()} done={vi.fn()} account={account} />);
-    expect((screen.getByLabelText(/账号区域/) as HTMLSelectElement).value).toBe("icloud.com");
+    expect((screen.getByLabelText(/账号区域/) as HTMLSelectElement).value).toBe("auto");
+    await signIn();
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).host).toBe("auto");
+  });
+
+  it("shows the detected region while preserving the next login step", async () => {
+    fetcher.mockResolvedValueOnce(json({ ...flow, auto_region: true, region_switched: true, host: "icloud.com.cn" }));
+    render(<AppleLoginForm close={vi.fn()} done={vi.fn()} />);
+    await signIn();
+    expect(screen.getByRole("status").textContent).toContain("切换到中国区");
+    expect((screen.getByLabelText("六位验证码") as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it("submits a manual international selection without automatic switching", async () => {
+    render(<AppleLoginForm close={vi.fn()} done={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/账号区域/), { target: { value: "icloud.com" } });
     await signIn();
     expect(JSON.parse(fetcher.mock.calls[0][1].body).host).toBe("icloud.com");
+    expect(screen.queryByText(/已根据 Apple 返回结果/)).toBeNull();
   });
 
   it("shows SMS guidance and allows retrying an incorrect code", async () => {
