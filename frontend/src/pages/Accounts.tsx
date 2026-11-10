@@ -1,3 +1,4 @@
+import { useBackgroundTasks } from "@/components/BackgroundTasks";
 import { useState } from "react";
 import {
   CheckCircle2,
@@ -200,7 +201,7 @@ export function Accounts({
   const [login, setLogin] = useState<Row | null>(null);
   const [details, setDetails] = useState<Row | null>(null);
   const [benefits, setBenefits] = useState<Row | null>(null);
-  const [busy, setBusy] = useState("");
+  const { enqueue } = useBackgroundTasks();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
@@ -274,15 +275,7 @@ export function Accounts({
                       <Button variant="outline" size="sm" onClick={() => setLogin(a)}>重新登录</Button>
                       <Button variant="ghost" size="icon" aria-label={"家庭与方案 " + a.name} title="家庭与方案" onClick={() => setBenefits(a)}><Users /></Button>
                       <Button variant="ghost" size="icon" aria-label={"设置账号 " + a.name} title="账号设置" onClick={() => setEditing(a)}><Edit3 /></Button>
-                      <Button variant="ghost" size="sm" disabled={!!busy} onClick={async () => {
-                        setBusy(a.id);
-                        try {
-                          await post(`/api/accounts/${enc(a.id)}/validate`);
-                          toast.success("账号校验完成");
-                          refresh();
-                        } catch (err) { toast.error(err.message); }
-                        finally { setBusy(""); }
-                      }}><CheckCircle2 />{busy === a.id ? "校验中…" : "校验"}</Button>
+                      <Button variant="ghost" size="sm" onClick={() => enqueue("账号校验", [{ path: `/api/accounts/${enc(a.id)}/validate`, label: a.name || a.id }])}><CheckCircle2 />校验</Button>
                       <Button variant="ghost" size="icon" aria-label={"移除账号 " + a.name} title="移除账号" onClick={() => setRemoving(a)}><Trash2 /></Button>
                     </div></td>
                   </tr>

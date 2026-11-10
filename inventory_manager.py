@@ -448,6 +448,27 @@ class InventoryManager:
             self.save(data)
             return True
 
+    def purge_many(self, emails):
+        """Remove trash in one atomic write, retaining each address's tombstone."""
+        with self.lock:
+            data = self.load()
+            results, changed = [], False
+            for key in dict.fromkeys(_email_key(email) for email in emails):
+                item = data["items"].get(key)
+                error = ""
+                if item is None and key not in data.get("purged_emails", {}):
+                    error = "记录不存在，请刷新列表。"
+                elif item is not None and item.get("group") != "trash":
+                    error = "只能永久删除垃圾箱中的记录，请先移入垃圾箱。"
+                elif item is not None:
+                    data.setdefault("purged_emails", {})[key] = _now()
+                    del data["items"][key]
+                    changed = True
+                results.append({"label": key, "state": "failed" if error else "complete", "error": error})
+            if changed:
+                self.save(data)
+            return results
+
     def apply_messages(self, messages: Iterable[Dict[str, Any]], account_id: str = "", method: str = "iCloud IMAP") -> Dict[str, Any]:
         with self.lock:
             data = self.load()

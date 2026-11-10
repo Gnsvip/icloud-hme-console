@@ -1,3 +1,4 @@
+import { useBackgroundTasks } from "@/components/BackgroundTasks";
 import { useEffect, useState } from "react";
 import {
   Download,
@@ -86,6 +87,7 @@ export function Batch({
   const [selected, setSelected] = useState<string[]>([]),
     [busy, setBusy] = useState(""),
     [error, setError] = useState(null);
+  const { enqueue } = useBackgroundTasks();
   const stock = useRemote("/api/auto-stock");
   const [config, setConfig] = useState<Row | null>(null);
   useEffect(() => {
@@ -293,7 +295,7 @@ export function Batch({
                 variant="outline"
                 disabled={!!busy || state.creating}
                 onClick={() =>
-                  run("run", () => post("/api/auto-stock/run", config, 300000))
+                  enqueue("立即补货", [{ path: "/api/auto-stock/run", body: config }])
                 }
               >
                 <Play />
@@ -420,6 +422,7 @@ export function LinkGenerator({
   );
 }
 export function PickupLinks() {
+  const { enqueue } = useBackgroundTasks();
   const [search, setSearch] = useState(""),
     [page, setPage] = useState(1),
     [size, setSize] = useState(20),
@@ -602,12 +605,8 @@ export function PickupLinks() {
           description="撤销后，原链接将无法继续读取验证码。邮箱本身不受影响。"
           close={() => setRevoke(null)}
           onConfirm={async () => {
-            await post("/api/pickup-links/revoke-batch", {
-              link_ids: revoke.map((r) => r.id),
-            });
+            enqueue("撤销取码链接", [{ path: "/api/pickup-links/revoke-batch", body: { link_ids: revoke.map(r => r.id) } }]);
             setSelected({});
-            query.refetch();
-            toast.success("链接已撤销");
           }}
         />
       )}
@@ -936,6 +935,7 @@ function ForwardEditor({
   );
 }
 export function Logs() {
+  const { enqueue } = useBackgroundTasks();
   const query = useRemote("/api/logs?limit=500", true, 10000),
     [level, setLevel] = useState("all"),
     [search, setSearch] = useState(""),
@@ -1014,9 +1014,7 @@ export function Logs() {
           description="将保留最近 14 天的运行记录，更早的记录会永久删除。"
           close={() => setCleanup(false)}
           onConfirm={async () => {
-            const d = await post("/api/logs/cleanup", { days: 14 });
-            toast.success(`已清理 ${d.removed || 0} 条日志`);
-            query.refetch();
+            enqueue("清理历史日志", [{ path: "/api/logs/cleanup", body: { days: 14 } }]);
           }}
         />
       )}

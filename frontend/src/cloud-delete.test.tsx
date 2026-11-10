@@ -14,14 +14,14 @@ it("shows progress, keeps polling in background, and never reposts on remount", 
   const first = render(<CloudDelete items={items} close={vi.fn()} done={vi.fn()} />);
   expect(fetcher).not.toHaveBeenCalled();
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "确认操作" })); });
-  expect(screen.getByText("已处理 0 / 1 个")).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(sessionStorage.getItem(DELETE_JOB_KEY)).toBe("synthetic");
-  fireEvent.click(screen.getByRole("button", { name: "后台继续" }));
   expect(screen.getByRole("button", { name: "查看删除进度" })).toBeTruthy();
   first.unmount();
   const done = vi.fn();
   fetcher.mockResolvedValue(json({ ...active, state: "complete", completed: 1, deleted: 1, items: [{ ...items[0], state: "deleted" }] }));
   await act(async () => { render(<CloudDelete items={[]} jobId="synthetic" close={vi.fn()} done={done} />); });
+  fireEvent.click(screen.getByRole("button", { name: "查看删除进度" }));
   expect(screen.getByText("已处理 1 / 1 个")).toBeTruthy();
   expect(done).toHaveBeenCalledTimes(1);
   expect(fetcher.mock.calls.filter(([path]) => path === "/api/alias-deletions")).toHaveLength(1);
@@ -32,6 +32,7 @@ it("retains the submission identifier when the initial response is lost", async 
   vi.stubGlobal("fetch", fetcher);
   render(<CloudDelete items={items} close={vi.fn()} done={vi.fn()} />);
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "确认操作" })); });
+  fireEvent.click(screen.getByRole("button", { name: "查看删除进度" }));
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "确认操作" })); });
   const posts = fetcher.mock.calls.filter(([path]) => path === "/api/alias-deletions");
   expect(posts).toHaveLength(2);

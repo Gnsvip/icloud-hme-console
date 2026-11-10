@@ -25,6 +25,7 @@ import {
 import { post, stamp, useRemote, type Row } from "./lib/api";
 import { PageHead } from "./components/PageHead";
 import { PageBoundary } from "./components/PageBoundary";
+import { BackgroundTaskBar, BackgroundTasksProvider } from "./components/BackgroundTasks";
 const AccountForm = lazy(() => import("./pages/Accounts").then(m => ({ default: m.AccountForm })));
 const Accounts = lazy(() => import("./pages/Accounts").then(m => ({ default: m.Accounts })));
 const Mailboxes = lazy(() => import("./pages/Mailboxes").then(m => ({ default: m.Mailboxes })));
@@ -129,7 +130,7 @@ export default function App() {
     );
   if (!authenticated) return <Login onLogin={() => setAuthenticated(true)} />;
   return (
-    <div className="app-shell">
+    <BackgroundTasksProvider><div className="app-shell">
       {mobile && (
         <button
           className="sidebar-backdrop"
@@ -258,6 +259,7 @@ export default function App() {
             <span className="avatar small">A</span>
           </div>
         </header>
+        <BackgroundTaskBar creation={state} />
         <main
           id="main-content"
           className={"page-content " + (tab === "inbox" ? "mail-content" : "")}
@@ -363,7 +365,7 @@ export default function App() {
           </div>
         </Modal>
       )}
-    </div>
+    </div></BackgroundTasksProvider>
   );
 }
 function Dashboard({

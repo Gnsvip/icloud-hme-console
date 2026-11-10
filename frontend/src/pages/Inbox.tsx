@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useBackgroundTasks } from "@/components/BackgroundTasks";
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   Mail,
   Search,
   Settings2,
 } from "lucide-react";
-import { api, enc, stamp, useRemote, type Row } from "@/lib/api";
+import { enc, stamp, useRemote, type Row } from "@/lib/api";
 import {
   AccountSelect,
   Button,
@@ -24,14 +25,13 @@ function messageKey(m: Row) {
 }
 export function InboxPage({ accounts }: { accounts: Row[] }) {
   const client = useQueryClient();
+  const { enqueue } = useBackgroundTasks();
   const initial =
     new URLSearchParams(location.hash.split("?")[1]).get("email") || "";
   const [account, setAccount] = useState("");
   const [limit, setLimit] = useState(20);
   const [input, setInput] = useState(initial);
   const [search, setSearch] = useState(initial);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshError, setRefreshError] = useState(null);
   const [selected, setSelected] = useState<Row | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [settings, setSettings] = useState<Row | null>(null);
@@ -82,20 +82,7 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
       query.refetch();
       return;
     }
-    setRefreshing(true);
-    setRefreshError(null);
-    try {
-      await client.cancelQueries({ queryKey: [path] });
-      const data = await api(
-        path.replace("cache_only=1", account ? "force=1" : "refresh=1"),
-        { timeout: 180000 },
-      );
-      client.setQueryData([path], data);
-    } catch (e) {
-      setRefreshError(e);
-    } finally {
-      setRefreshing(false);
-    }
+    enqueue("刷新收件箱", [{ path: path.replace("cache_only=1", account ? "force=1" : "refresh=1"), method: "GET" }]);
   };
   return (
     <>
@@ -115,7 +102,7 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
           收件设置
         </Button>
         <RefreshButton
-          busy={query.isFetching || refreshing}
+          busy={query.isFetching}
           onClick={refresh}
         />
       </PageHead>
@@ -167,7 +154,7 @@ export function InboxPage({ accounts }: { accounts: Row[] }) {
             </Button>
           )}
         </div>
-        <ErrorNotice error={refreshError || query.error} retry={refresh} />
+        <ErrorNotice error={query.error} retry={refresh} />
         {query.data?.errors?.length > 0 && (
           <div className="error-notice">
             部分账号未能刷新：{query.data.errors.join("；")}

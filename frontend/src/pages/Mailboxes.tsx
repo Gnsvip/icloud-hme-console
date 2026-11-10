@@ -10,9 +10,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
-import { api, enc, post, stamp, useDebounced, useRemote, type Row } from "@/lib/api";
+import { enc, stamp, useDebounced, useRemote, type Row } from "@/lib/api";
 import {
   AccountSelect,
   Button,
@@ -31,7 +29,7 @@ import {
 } from "@/components/common";
 import { PageHead } from "@/components/PageHead";
 import { LinkGenerator } from "./Tools";
-import { CloudDelete, rememberedDeleteJob } from "./CloudDelete";
+import { useBackgroundTasks } from "@/components/BackgroundTasks";
 export function Mailboxes({
   mode,
   accounts,
@@ -39,7 +37,6 @@ export function Mailboxes({
   mode: string;
   accounts: Row[];
 }) {
-  const client = useQueryClient();
   const [group, setGroup] = useState(mode === "codes" ? "unused" : "all");
   const [search, setSearch] = useState(
     () => new URLSearchParams(location.hash.split("?")[1]).get("search") || "",
@@ -52,18 +49,7 @@ export function Mailboxes({
   const [actions, setActions] = useState<Row | null>(null);
   const [form, setForm] = useState<{ kind: string; rows: Row[] } | null>(null);
   const [links, setLinks] = useState<string | null>(null);
-  const [busy, setBusy] = useState("");
-  const [deletion, setDeletion] = useState<{ items: Row[]; jobId?: string } | null>(() => {
-    const jobId = rememberedDeleteJob();
-    return jobId ? { items: [], jobId } : null;
-  });
-  useEffect(() => {
-    let mounted = true;
-    void api("/api/alias-deletions/active").then((data) => {
-      if (mounted && data.job) setDeletion((old) => old || { items: [], jobId: data.job.job_id });
-    }).catch(() => {});
-    return () => { mounted = false; };
-  }, []);
+  const { enqueue, openCloud } = useBackgroundTasks();
   const [confirm, setConfirm] = useState<{
     title: string;
     description: string;
@@ -87,31 +73,17 @@ export function Mailboxes({
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
-  const refresh = () =>
-    client.invalidateQueries({
-      predicate: (x) =>
-        String(x.queryKey[0]).startsWith("/api/inventory") ||
-        x.queryKey[0] === "/api/state",
+  useEffect(() => {
+    const completed = (event: Event) => setSelected(old => {
+      const next = { ...old };
+      for (const row of (event as CustomEvent).detail?.items || []) {
+        if (["complete", "deleted", "absent"].includes(row.state)) delete next[row.email || row.label];
+      }
+      return next;
     });
-  async function run(name: string, task: () => Promise<any>) {
-    setBusy(name);
-    try {
-      const data = await task();
-      if (data.errors?.length)
-        toast.warning(
-          data.errors
-            .map((e: any) => (typeof e === "string" ? e : e.error))
-            .join("；"),
-        );
-      else toast.success(data.message || name + "完成");
-      await refresh();
-      return data;
-    } catch (error) {
-      toast.error(error.message);
-    } finally {
-      setBusy("");
-    }
-  }
+    window.addEventListener("hme-task-complete", completed);
+    return () => window.removeEventListener("hme-task-complete", completed);
+  }, []);
   const toggle = (row: Row) =>
     setSelected((old) => {
       const next = { ...old };
@@ -119,17 +91,12 @@ export function Mailboxes({
       else next[row.email] = row;
       return next;
     });
-  const move = (items: Row[], target: string) =>
-    run("更新状态", async () => {
-      for (const row of items)
-        await post(`/api/inventory/${enc(row.email)}/move`, { group: target });
-      setSelected({});
-      setActions(null);
-      return {};
-    });
+  const move = (items: Row[], target: string) => {
+    enqueue("更新邮箱状态", items.map(row => ({ path: `/api/inventory/${enc(row.email)}/move`, body: { group: target }, label: row.email })));
+    setSelected({}); setActions(null);
+  };
   function deleteCloud(items: Row[]) {
-    setActions(null);
-    if (!deletion) setDeletion({ items });
+    setActions(null); openCloud(items);
   }
   function purgeTrash(items: Row[]) {
     setActions(null);
@@ -139,32 +106,13 @@ export function Mailboxes({
       run: async () => {
         if (items.some((row) => row.group !== "trash"))
           throw new Error("只能永久删除垃圾箱中的记录，请刷新列表。");
-        try {
-          for (const row of items) {
-            await post(`/api/inventory/${enc(row.email)}/purge`);
-            setSelected((old) => {
-              const next = { ...old };
-              delete next[row.email];
-              return next;
-            });
-          }
-          toast.success(`已永久删除 ${items.length} 条垃圾箱记录`);
-        } finally {
-          await refresh();
-        }
+        enqueue("永久删除垃圾箱记录", items.map(row => ({ path: `/api/inventory/${enc(row.email)}/purge`, label: row.email })));
+        setSelected({});
       },
     });
   }
   return (
     <>
-      {deletion && <CloudDelete {...deletion} close={() => setDeletion(null)} done={(job) => {
-        setSelected((old) => {
-          const next = { ...old };
-          job.items.forEach((row: Row) => { if (row.state !== "failed") delete next[row.email]; });
-          return next;
-        });
-        void refresh();
-      }} />}
       <PageHead
         eyebrow={mode === "codes" ? "CODE DESK" : "MAILBOXES"}
         title={mode === "codes" ? "验证码，随时就绪。" : "你的隐私邮箱。"}
@@ -175,17 +123,15 @@ export function Mailboxes({
         }
       >
         <RefreshButton
-          busy={query.isFetching || !!busy}
+          busy={query.isFetching}
           onClick={() => query.refetch()}
         />
         <Button
-          disabled={!!busy}
           onClick={() =>
-            run("云端同步", () => post("/api/inventory/sync", { live: true }))
+            enqueue("云端同步", [{ path: "/api/inventory/sync", body: { live: true } }])
           }
         >
-          <RefreshCw className={busy === "云端同步" ? "spin" : ""} />
-          {busy === "云端同步" ? "同步中…" : "云端同步"}
+          <RefreshCw />云端同步
         </Button>
       </PageHead>
       <section className="panel mailbox-panel">
@@ -220,15 +166,8 @@ export function Mailboxes({
               <Button
                 variant="outline"
                 size="sm"
-                disabled={!!busy}
                 onClick={() =>
-                  run("iCloud 查件", () =>
-                    post("/api/inventory/check-icloud", {
-                      account_id: account,
-                      limit: 50,
-                      force: true,
-                    }),
-                  )
+                  enqueue("iCloud 查件", [{ path: "/api/inventory/check-icloud", body: { account_id: account, limit: 50, force: true } }])
                 }
               >
                 iCloud 查件
@@ -236,14 +175,8 @@ export function Mailboxes({
               <Button
                 variant="outline"
                 size="sm"
-                disabled={!!busy}
                 onClick={() =>
-                  run("转发查件", () =>
-                    post("/api/inventory/check-forward", {
-                      account_id: account,
-                      limit: 50,
-                    }),
-                  )
+                  enqueue("转发查件", [{ path: "/api/inventory/check-forward", body: { account_id: account, limit: 50 } }])
                 }
               >
                 转发查件
@@ -251,15 +184,8 @@ export function Mailboxes({
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={!!busy}
                 onClick={() =>
-                  run("云端校准", () =>
-                    post(
-                      "/api/inventory/calibrate-cloud",
-                      { account_id: account, limit: 1500 },
-                      300000,
-                    ),
-                  )
+                  enqueue("云端校准", [{ path: "/api/inventory/calibrate-cloud", body: { account_id: account, limit: 1500 } }])
                 }
               >
                 校准
@@ -305,8 +231,7 @@ export function Mailboxes({
             <Button
               variant="ghost"
               size="sm"
-              disabled={!!busy}
-              onClick={() =>
+                  onClick={() =>
                 move(checked, group === "trash" ? "unused" : "finished")
               }
             >
@@ -315,8 +240,7 @@ export function Mailboxes({
             <Button
               variant="ghost"
               size="sm"
-              disabled={!!busy}
-              onClick={() => checkedAreTrash ? purgeTrash(checked) : deleteCloud(checked)}
+                  onClick={() => checkedAreTrash ? purgeTrash(checked) : deleteCloud(checked)}
             >
               <Trash2 />
               {checkedAreTrash ? "永久删除" : "删除别名"}
@@ -331,12 +255,6 @@ export function Mailboxes({
           </div>
         )}
         <ErrorNotice error={query.error} retry={query.refetch} />
-        {busy && (
-          <div className="busy-strip">
-            <RefreshCw size={14} className="spin" />
-            {busy}进行中，请稍候…
-          </div>
-        )}
         {query.isPending ? (
           <Loading />
         ) : !rows.length ? (
@@ -534,8 +452,7 @@ export function Mailboxes({
               编辑本地备注
             </button>
             <button
-              disabled={!!busy}
-              onClick={() =>
+                  onClick={() =>
                 move(
                   [actions],
                   actions.group === "finished" ? "unused" : "finished",
@@ -545,8 +462,7 @@ export function Mailboxes({
               标记为{actions.group === "finished" ? "未使用" : "已使用"}
             </button>
             <button
-              disabled={!!busy}
-              onClick={() =>
+                  onClick={() =>
                 move([actions], actions.group === "trash" ? "unused" : "trash")
               }
             >
@@ -575,22 +491,12 @@ export function Mailboxes({
           value={form.rows.length === 1 ? form.rows[0][form.kind] || "" : ""}
           close={() => setForm(null)}
           save={async (value) => {
-            for (const row of form.rows) {
-              if (form.kind === "label") {
-                if (!row.anonymousId || !row.account_id)
-                  throw new Error("地址缺少云端标识，请先同步");
-                await post(
-                  `/api/accounts/${enc(row.account_id)}/aliases/${enc(row.anonymousId)}/label`,
-                  { label: value, email: row.email },
-                );
-              } else
-                await post(`/api/inventory/${enc(row.email)}/remark`, {
-                  remark: value,
-                });
-            }
-            await refresh();
+            if (form.kind === "label" && form.rows.some(row => !row.anonymousId || !row.account_id))
+              throw new Error("地址缺少云端标识，请先同步");
+            enqueue(form.kind === "label" ? "更新云端标签" : "更新本地备注", form.rows.map(row => form.kind === "label"
+              ? { path: `/api/accounts/${enc(row.account_id)}/aliases/${enc(row.anonymousId)}/label`, body: { label: value, email: row.email }, label: row.email }
+              : { path: `/api/inventory/${enc(row.email)}/remark`, body: { remark: value }, label: row.email }));
             setForm(null);
-            toast.success("已保存");
           }}
         />
       )}

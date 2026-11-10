@@ -1,8 +1,36 @@
-from flask import Blueprint
+from flask import Blueprint, current_app, jsonify, request
 
 from services import code_inventory_service
 
 bp = Blueprint("inventory", __name__)
+
+from services.background_tasks import BackgroundTasks
+from services.background_operations import prepare_operations
+from services.alias_delete_service import DeleteJobError
+
+_background_tasks = BackgroundTasks()
+
+
+@bp.route('/api/background-tasks', methods=['POST'])
+def api_start_background_task():
+    app = current_app._get_current_object()
+    try:
+        return jsonify(_background_tasks.start(request.get_json(silent=True), lambda steps: prepare_operations(app, steps))), 202
+    except DeleteJobError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
+
+
+@bp.route('/api/background-tasks/active')
+def api_active_background_tasks():
+    return jsonify(_background_tasks.active())
+
+
+@bp.route('/api/background-tasks/<job_id>')
+def api_background_task_status(job_id):
+    try:
+        return jsonify(_background_tasks.status(job_id))
+    except DeleteJobError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
 
 @bp.route('/api/aliases')
 def api_aliases():

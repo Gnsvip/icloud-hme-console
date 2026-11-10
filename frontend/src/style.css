@@ -2293,3 +2293,12 @@ tr[data-selected="true"] {
   .benefits-overview section { padding: 10px 12px; }
   .benefits-links [data-slot="button"] { width: 100%; white-space: normal; height: auto; }
 }
+
+/* Global jobs remain visible across navigation without occupying the page. */
+.background-tasks { padding: 10px 28px; border-bottom: 1px solid var(--border); background: var(--background); max-height: 180px; overflow-y: auto; }
+.background-task-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; min-height: 38px; }
+.background-task-row > span { overflow-wrap: anywhere; }
+.background-task-row > div { display: flex; flex-shrink: 0; }
+.background-task-details { max-height: 45vh; overflow-y: auto; overflow-wrap: anywhere; font-size: 14px; }
+.background-tasks .busy-strip { margin: 0; }
+@media (max-width: 640px) { .background-tasks { padding: 8px 14px; } .background-task-row { align-items: flex-start; flex-wrap: wrap; gap: 2px; } }

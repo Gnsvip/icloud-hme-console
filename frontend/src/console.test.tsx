@@ -18,6 +18,11 @@ import { InboxPage } from "./pages/Inbox";
 import { Batch } from "./pages/Tools";
 import { Mailboxes } from "./pages/Mailboxes";
 import App from "./App";
+// These page unit tests do not submit background operations; the full lifecycle
+// and navigation contract is exercised in background-tasks.test.tsx.
+vi.mock("./components/BackgroundTasks", async (original) => ({
+  ...await original<any>(), useBackgroundTasks: () => ({ enqueue: vi.fn(), openCloud: vi.fn() }),
+}));
 function json(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
     status,

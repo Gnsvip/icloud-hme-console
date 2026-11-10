@@ -12,7 +12,7 @@ export function CloudDelete({ items, jobId, close, done }: {
   const [job, setJob] = useState<Row | null>(jobId ? { job_id: jobId, state: "preparing", total: 0, completed: 0, items: [] } : null);
   const [error, setError] = useState<any>(null);
   const [busy, setBusy] = useState(false);
-  const [hidden, setHidden] = useState(false);
+  const [hidden, setHidden] = useState(!!jobId);
   const [expired, setExpired] = useState(false);
   const requestId = useRef(crypto.randomUUID());
   const notified = useRef(false);
@@ -53,7 +53,7 @@ export function CloudDelete({ items, jobId, close, done }: {
     else { remember(""); close(); }
   };
   const start = async () => {
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setHidden(true);
     try {
       const next = await post("/api/alias-deletions", {
         request_id: requestId.current,
@@ -69,8 +69,9 @@ export function CloudDelete({ items, jobId, close, done }: {
   };
 
   if (hidden) return <div className="busy-strip" role="status">
-    <span>{complete ? "云端删除已完成" : expired ? "删除状态需要核对" : `云端删除进度 ${job?.completed || 0}/${job?.total || "…"}`}</span>
+    <span>{busy ? "正在提交云端删除…" : error || expired ? "云端删除状态需要核对" : complete ? `云端删除已完成 · 失败 ${job?.failed || 0}` : `云端删除进度 ${job?.completed || 0}/${job?.total || "…"}`}</span>
     <Button variant="outline" size="sm" onClick={() => setHidden(false)}>查看删除进度</Button>
+    {(complete || expired) && <Button variant="ghost" size="sm" onClick={dismiss}>收起</Button>}
   </div>;
 
   return <Modal title={!job ? `删除 ${items.length} 个云端别名？` : complete ? "云端删除结果" : "正在删除云端别名"}
